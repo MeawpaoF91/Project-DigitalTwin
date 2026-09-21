@@ -1,0 +1,1213 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Digital Twin RFID | Conveyor Tracking</title>
+    
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.7/css/dataTables.bootstrap5.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap" rel="stylesheet">
+    
+    <style>
+        /* ---------- Tokens ----------
+           สีหลักผูกกับฉาก 3D: น้ำเงิน = PASS (เท่ากับสีกล่อง/ไฟ Gate), แดง = REJECT */
+        :root {
+            --ink: #0a0e1a;        /* พื้นหลังเดียวกับฉาก 3D */
+            --deck: #0f1526;       /* พื้นผิวแผง */
+            --deck-2: #151d33;
+            --rule: #1d2743;       /* เส้นแบ่งบาง */
+            --rule-2: #2a3760;
+            --text: #e7edfb;
+            --text-2: #94a1c0;
+            --text-3: #5f6c8c;
+            --signal: #4aa8ff;     /* สีเน้น = เส้นไฟขอบสายพาน */
+            --pass: #378ADD;
+            --reject: #E24B4A;
+            --ok: #3fcf9b;
+            --amber: #e3a13b;
+            --font-ui: 'IBM Plex Sans Thai', 'Noto Sans Thai', system-ui, -apple-system, 'Segoe UI', sans-serif;
+            --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            --bs-body-bg: var(--ink);
+            --bs-body-color: var(--text);
+            --bs-body-font-family: var(--font-ui);
+        }
+        html, body { background: var(--ink); }
+        body { font-family: var(--font-ui); font-size: 14px; line-height: 1.5; color: var(--text); }
+        .shell { max-width: 1440px; margin: 0 auto; padding: 0 24px; }
+        :focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+
+        /* ---------- แถบบน ---------- */
+        .topbar { border-bottom: 1px solid var(--rule); }
+        .topbar-in { display: flex; align-items: center; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; padding-top: 14px; padding-bottom: 14px; }
+        .brand { display: flex; align-items: center; gap: 12px; }
+        .brand-mark { width: 40px; height: 22px; color: var(--signal); flex: none; }
+        .brand-name { font-size: 16px; font-weight: 600; line-height: 1.2; }
+        .brand-sub { font-size: 12px; color: var(--text-2); }
+
+        /* สถานะ MQTT: JS เดิมสลับคลาส alert-warning / alert-success / alert-danger อยู่แล้ว จึงใช้คลาสนั้นกำหนดสีจุด */
+        #mqtt-status { position: relative; margin: 0; padding: 6px 14px 6px 32px; border: 1px solid var(--rule-2); border-radius: 999px; background: transparent; color: var(--text-2); font-size: 12.5px; }
+        #mqtt-status strong { color: var(--text); font-weight: 500; }
+        #mqtt-status::before { content: ''; position: absolute; left: 14px; top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 50%; background: var(--amber); animation: blink 1.6s ease-in-out infinite; }
+        #mqtt-status.alert-success::before { background: var(--ok); animation: none; }
+        #mqtt-status.alert-danger { border-color: rgba(226, 75, 74, .55); }
+        #mqtt-status.alert-danger::before { background: var(--reject); animation: none; }
+        @keyframes blink { 50% { opacity: .3; } }
+        @media (prefers-reduced-motion: reduce) { #mqtt-status::before { animation: none; } }
+
+        /* ---------- ส่วนหลัก: ฉาก 3D + แผงตัวเลข ---------- */
+        .stage { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; margin-top: 20px; }
+
+        #canvas-wrap { position: relative; height: clamp(460px, 66vh, 680px); border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; background: var(--ink); }
+        canvas { display: block; width: 100% !important; height: 100% !important; outline: none; }
+
+        #hud { position: absolute; top: 14px; left: 14px; pointer-events: none; }
+        .hud-badge, .view-switch, .legend { background: rgba(10, 14, 26, .72); border: 1px solid var(--rule-2); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+        .hud-badge { display: inline-flex; align-items: center; gap: 8px; padding: 5px 13px 5px 11px; border-radius: 999px; font-size: 12px; font-weight: 500; color: var(--text); }
+        .hud-badge::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+        .hud-badge.connected::before { background: var(--ok); }
+        .hud-badge.error::before { background: var(--reject); }
+
+        .view-switch { position: absolute; top: 12px; right: 12px; display: flex; gap: 2px; padding: 3px; border-radius: 999px; }
+        .ctrl-btn { border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; padding: 5px 13px; border-radius: 999px; cursor: pointer; transition: background .15s, color .15s; }
+        .ctrl-btn:hover { color: var(--text); }
+        .ctrl-btn.active { background: rgba(74, 168, 255, .18); color: var(--signal); }
+
+        .legend { position: absolute; left: 14px; bottom: 12px; display: flex; align-items: center; gap: 14px; padding: 5px 13px; border-radius: 999px; font-size: 12px; color: var(--text-2); }
+        .legend span { display: inline-flex; align-items: center; gap: 6px; }
+        .sw { width: 8px; height: 8px; border-radius: 2px; display: inline-block; flex: none; }
+        .sw.pass { background: var(--pass); }
+        .sw.reject { background: var(--reject); }
+
+        /* แผงตัวเลข: ใช้เส้นแบ่งแทนการแยกเป็นการ์ดหลายใบ */
+        .readout { display: flex; flex-direction: column; background: var(--deck); border: 1px solid var(--rule); border-radius: 10px; }
+        .readout > section { padding: 20px 22px; border-bottom: 1px solid var(--rule); }
+        .readout > section:last-child { border-bottom: 0; margin-top: auto; }
+        .r-label { font-size: 13px; color: var(--text-2); }
+        .r-total { margin-top: 2px; font-size: 60px; font-weight: 500; line-height: 1.05; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+        .ratio-bar { display: flex; height: 6px; margin: 18px 0 14px; border-radius: 3px; overflow: hidden; background: var(--rule); }
+        .ratio-bar span { display: block; height: 100%; width: 0; transition: width .5s ease; }
+        #ratio-pass { background: var(--pass); }
+        #ratio-reject { background: var(--reject); }
+        .counts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .count-label { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text-2); }
+        .count-val { font-size: 28px; font-weight: 500; line-height: 1.2; font-variant-numeric: tabular-nums; }
+
+        .pairs { margin: 0; }
+        .pairs > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--rule); }
+        .pairs > div:first-child { padding-top: 0; }
+        .pairs > div:last-child { padding-bottom: 0; border-bottom: 0; }
+        .pairs dt { font-size: 13px; font-weight: 400; color: var(--text-2); }
+        .pairs dd { margin: 0; font-size: 15px; font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
+
+        .sim-title { font-size: 13px; color: var(--text-2); margin-bottom: 10px; }
+        .sim-row { display: flex; flex-wrap: wrap; gap: 8px; }
+        .sim-btn { flex: 1 1 0; border: 1px solid var(--rule-2); background: transparent; color: var(--text); font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 8px; cursor: pointer; transition: background .15s, border-color .15s; }
+        .sim-btn:hover { background: var(--deck-2); border-color: var(--signal); }
+        .sim-btn:active { background: rgba(74, 168, 255, .14); }
+
+        /* ---------- ตารางประวัติ ---------- */
+        .log { margin: 20px 0 48px; padding: 18px 22px 14px; background: var(--deck); border: 1px solid var(--rule); border-radius: 10px; }
+        .log-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+        .log-head h2 { margin: 0; font-size: 16px; font-weight: 600; }
+        .log-head p { margin: 0; font-size: 12.5px; color: var(--text-2); }
+
+        .log .table { --bs-table-bg: transparent; --bs-table-color: var(--text); --bs-table-border-color: var(--rule); --bs-table-hover-bg: rgba(74, 168, 255, .06); --bs-table-striped-bg: transparent; margin-bottom: 0; }
+        .log .table > :not(caption) > * > * { padding: 11px 12px; background-color: transparent; border-bottom: 1px solid var(--rule); box-shadow: none; }
+        .log .table thead th { font-size: 12.5px; font-weight: 500; color: var(--text-2); border-bottom-color: var(--rule-2); white-space: nowrap; }
+        .log .table tbody tr:hover > * { background-color: rgba(74, 168, 255, .06); }
+        .log td.mono { font-family: var(--font-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+        .log td.dataTables_empty { padding: 36px 12px; text-align: center; color: var(--text-2); }
+        table.dataTable thead .sorting:before, table.dataTable thead .sorting:after,
+        table.dataTable thead .sorting_asc:before, table.dataTable thead .sorting_asc:after,
+        table.dataTable thead .sorting_desc:before, table.dataTable thead .sorting_desc:after { opacity: .25; }
+        table.dataTable thead .sorting_asc:before, table.dataTable thead .sorting_desc:after { opacity: .9; }
+
+        .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px 2px 9px; border: 1px solid; border-radius: 999px; font-size: 12px; font-weight: 500; }
+        .chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+        .chip-pass { color: #6db8ff; border-color: rgba(55, 138, 221, .5); background: rgba(55, 138, 221, .12); }
+        .chip-reject { color: #f27a79; border-color: rgba(226, 75, 74, .5); background: rgba(226, 75, 74, .12); }
+        .chip-other { color: var(--text-2); border-color: var(--rule-2); }
+
+        .dataTables_wrapper .dataTables_length, .dataTables_wrapper .dataTables_filter,
+        .dataTables_wrapper .dataTables_info { font-size: 13px; color: var(--text-2); }
+        .dataTables_wrapper .form-control, .dataTables_wrapper .form-select { background-color: var(--ink); border-color: var(--rule-2); color: var(--text); font-size: 13px; }
+        .dataTables_wrapper .form-control:focus, .dataTables_wrapper .form-select:focus { border-color: var(--signal); box-shadow: 0 0 0 3px rgba(74, 168, 255, .18); }
+        .dataTables_wrapper .page-link { background: transparent; border-color: var(--rule-2); color: var(--text-2); font-size: 13px; }
+        .dataTables_wrapper .page-link:hover { background: var(--deck-2); color: var(--text); }
+        .dataTables_wrapper .page-item.active .page-link { background: rgba(74, 168, 255, .18); border-color: var(--signal); color: var(--signal); }
+        .dataTables_wrapper .page-item.disabled .page-link { background: transparent; color: var(--text-3); border-color: var(--rule); }
+
+        /* ---------- จอเล็ก ---------- */
+        @media (max-width: 991px) {
+            .stage { grid-template-columns: 1fr; }
+            #canvas-wrap { height: clamp(340px, 56vh, 500px); }
+            .readout { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+            .readout > section { border-right: 1px solid var(--rule); }
+            .readout > section:last-child { margin-top: 0; }
+        }
+        @media (max-width: 575px) {
+            .shell { padding: 0 14px; }
+            .view-switch { top: auto; bottom: 12px; right: 12px; }
+            .legend { display: none; }
+            .r-total { font-size: 48px; }
+            .log { padding: 16px 14px 12px; }
+        }
+    </style>
+</head>
+<body data-bs-theme="dark">
+
+    <header class="topbar">
+        <div class="shell topbar-in">
+            <div class="brand">
+                <!-- สัญลักษณ์: รางสายพานรูปวงรี -->
+                <svg class="brand-mark" viewBox="0 0 40 22" aria-hidden="true">
+                    <rect x="1.5" y="1.5" width="37" height="19" rx="9.5" fill="none" stroke="currentColor" stroke-width="2"/>
+                    <rect x="9" y="7" width="22" height="8" rx="4" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".45"/>
+                    <circle cx="29" cy="11" r="2.2" fill="currentColor"/>
+                </svg>
+                <div>
+                    <div class="brand-name">Digital Twin RFID</div>
+                    <div class="brand-sub">ติดตามพัสดุบนสายพานแบบเรียลไทม์</div>
+                </div>
+            </div>
+            <div id="mqtt-status" class="alert alert-warning" role="alert">
+                กำลังเชื่อมต่อ MQTT Broker...
+            </div>
+        </div>
+    </header>
+
+    <main class="shell">
+        <div id="app-3d" class="stage">
+            <div id="canvas-wrap">
+                <canvas id="c"></canvas>
+                <div id="hud">
+                    <div class="hud-badge connecting" id="status-badge">กำลังเชื่อมต่อ...</div>
+                </div>
+                <div class="view-switch" role="group" aria-label="มุมมองกล้อง">
+                    <button class="ctrl-btn active" data-cam="iso" onclick="setCam('iso')">Isometric</button>
+                    <button class="ctrl-btn" data-cam="top" onclick="setCam('top')">Top</button>
+                    <button class="ctrl-btn" data-cam="side" onclick="setCam('side')">Side</button>
+                </div>
+                <div class="legend" aria-label="ความหมายของสีไฟที่ Gate">
+                    <span>สีไฟที่ Gate</span>
+                    <span><i class="sw pass"></i>PASS</span>
+                    <span><i class="sw reject"></i>REJECT</span>
+                </div>
+            </div>
+
+            <aside class="readout" id="stats-3d">
+                <section>
+                    <div class="r-label">กล่องทั้งหมด</div>
+                    <div class="r-total" id="s-total">0</div>
+                    <div class="ratio-bar" role="img" aria-label="สัดส่วน PASS ต่อ REJECT">
+                        <span id="ratio-pass"></span><span id="ratio-reject"></span>
+                    </div>
+                    <div class="counts">
+                        <div>
+                            <div class="count-label"><i class="sw pass"></i>ผ่าน (PASS)</div>
+                            <div class="count-val" id="s-pass">0</div>
+                        </div>
+                        <div>
+                            <div class="count-label"><i class="sw reject"></i>คัดทิ้ง (REJECT)</div>
+                            <div class="count-val" id="s-reject">0</div>
+                        </div>
+                    </div>
+                </section>
+                <section>
+                    <dl class="pairs">
+                        <div><dt>อัตราผ่าน</dt><dd id="s-rate">-</dd></div>
+                        <div><dt>แท็กที่สแกนแล้ว</dt><dd id="s-tags">0</dd></div>
+                        <div><dt>ความเร็วสายพาน (PLC)</dt><dd id="s-speed">- m/s</dd></div>
+                    </dl>
+                </section>
+                <section>
+                    <div class="sim-title">จำลองการทำงาน</div>
+                    <div class="sim-row">
+                        <button class="sim-btn" onclick="sendFake()">สุ่ม 1 กล่อง</button>
+                        <button class="sim-btn" onclick="spawnMultiple()">สุ่ม 5 กล่อง</button>
+                    </div>
+                </section>
+            </aside>
+        </div>
+
+        <section class="log">
+            <div class="log-head">
+                <h2>ประวัติการสแกน</h2>
+                <p>เรียงจากล่าสุด</p>
+            </div>
+            <table id="dataTable" class="table" style="width:100%">
+                <thead>
+                    <tr>
+                        <th>tag_id</th>
+                        <th>gate_name</th>
+                        <th>status</th>
+                        <th>event_time</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </section>
+    </main>
+
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.7/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.7/js/dataTables.bootstrap5.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+
+    <script>
+        // ==========================================
+        // ส่วนที่ 1: ตั้งค่า THREE.JS
+        // ==========================================
+        const canvas = document.getElementById('c');
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); 
+        renderer.shadowMap.enabled = true; 
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.outputEncoding = THREE.sRGBEncoding;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.1;
+        // แปลงสี hex (sRGB) เป็นสี linear สำหรับ material/light เพื่อให้สีตรงกับที่ตั้งใจ
+        const C = (hex) => new THREE.Color(hex).convertSRGBToLinear();
+        // จุดสำคัญของโมเดล ใช้คำนวณระยะกล้องให้พอดีเฟรมทุกขนาดจอ
+        const fitPoints = []; 
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a0e1a); 
+        scene.fog = new THREE.Fog(0x0a0e1a, 30, 70); 
+
+        const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 200);
+        
+        let camMode = 'iso';
+        // pos ใช้กำหนด "ทิศ" ของกล้อง ส่วนระยะจริงคำนวณอัตโนมัติใน frameCamera()
+        const camPresets = {
+            iso:  { pos: [16, 17.8, 12.5], look: [0, 2.8, -3.5] },
+            top:  { pos: [0, 26, -2], look: [0, 0, -3.5] },
+            side: { pos: [0, 6.9, 18.5], look: [0, 3.6, -3.5] }
+        };
+
+        function frameCamera() {
+            const p = camPresets[camMode];
+            const look = new THREE.Vector3(...p.look);
+            const dir = new THREE.Vector3(...p.pos).sub(look);
+            let dist = dir.length();
+            dir.normalize();
+            const place = (d) => {
+                camera.position.copy(dir).multiplyScalar(d).add(look);
+                camera.lookAt(look);
+                camera.updateMatrixWorld();
+            };
+            if (fitPoints.length) {
+                const v = new THREE.Vector3();
+                const fits = (d) => {
+                    place(d);
+                    return fitPoints.every(pt => {
+                        v.copy(pt).project(camera);
+                        return Math.abs(v.x) <= 0.9 && Math.abs(v.y) <= 0.9;
+                    });
+                };
+                let lo = 6, hi = 120;
+                for (let i = 0; i < 26; i++) { const mid = (lo + hi) / 2; if (fits(mid)) hi = mid; else lo = mid; }
+                dist = hi;
+            }
+            place(dist);
+        }
+
+        function setCam(mode) {
+            camMode = mode;
+            document.querySelectorAll('[data-cam]').forEach(b => {
+                const on = b.dataset.cam === mode;
+                b.classList.toggle('active', on);
+                b.setAttribute('aria-pressed', on);
+            });
+            frameCamera();
+        }
+        setCam('iso');
+
+        // ---------- แสง ----------
+        scene.add(new THREE.HemisphereLight(C(0x9dbbff), C(0x0a0e1a), 0.55));
+
+        const dirLight = new THREE.DirectionalLight(C(0xfff0e0), 2.2);
+        dirLight.position.set(10, 20, 8);
+        dirLight.target.position.set(0, 0, -3.5);
+        scene.add(dirLight.target);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.set(2048, 2048);
+        dirLight.shadow.camera.left = -15; dirLight.shadow.camera.right = 15;
+        dirLight.shadow.camera.top = 15;   dirLight.shadow.camera.bottom = -15;
+        dirLight.shadow.camera.near = 1;   dirLight.shadow.camera.far = 60;
+        dirLight.shadow.bias = -0.0004;
+        dirLight.shadow.normalBias = 0.03;
+        dirLight.shadow.radius = 3;
+        scene.add(dirLight);
+
+        const rimLight = new THREE.DirectionalLight(C(0x3b7bff), 1.3); // แสงขอบสีน้ำเงินจากด้านหลัง
+        rimLight.position.set(-12, 9, -16);
+        scene.add(rimLight);
+
+        const pointLight = new THREE.PointLight(C(0x4488ff), 0.8, 40);
+        pointLight.position.set(-6, 7, -3.5);
+        scene.add(pointLight);
+
+        // ---------- Environment map (ให้โลหะมีเงาสะท้อน) ----------
+        function makeEnvTexture() {
+            const cv = document.createElement('canvas'); cv.width = 1024; cv.height = 512;
+            const x = cv.getContext('2d');
+            const g = x.createLinearGradient(0, 0, 0, 512);
+            g.addColorStop(0, '#5a7fc0'); g.addColorStop(0.45, '#1f2d4a'); g.addColorStop(0.5, '#0f1626'); g.addColorStop(1, '#04060c');
+            x.fillStyle = g; x.fillRect(0, 0, 1024, 512);
+            const softbox = (cx, cy, w, h, a) => {
+                const r = Math.max(w, h);
+                const gr = x.createRadialGradient(cx, cy, 0, cx, cy, r);
+                gr.addColorStop(0, 'rgba(255,255,255,' + a + ')'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+                x.fillStyle = gr; x.fillRect(cx - r, cy - r, r * 2, r * 2);
+            };
+            softbox(230, 140, 150, 60, 1.0); softbox(720, 120, 190, 50, 0.85); softbox(480, 200, 100, 40, 0.6);
+            const t = new THREE.CanvasTexture(cv);
+            t.mapping = THREE.EquirectangularReflectionMapping; t.encoding = THREE.sRGBEncoding;
+            const pm = new THREE.PMREMGenerator(renderer);
+            const env = pm.fromEquirectangular(t).texture;
+            t.dispose(); pm.dispose();
+            return env;
+        }
+        scene.environment = makeEnvTexture();
+
+        // ---------- พื้น + กริด ----------
+        function makeFloorTexture() {
+            const cv = document.createElement('canvas'); cv.width = cv.height = 1024;
+            const x = cv.getContext('2d');
+            const g = x.createRadialGradient(512, 512, 0, 512, 512, 512);
+            g.addColorStop(0, 'rgba(15,21,40,1)'); g.addColorStop(0.5, 'rgba(11,16,31,0.95)'); g.addColorStop(1, 'rgba(10,14,26,0)');
+            x.fillStyle = g; x.fillRect(0, 0, 1024, 1024);
+            const t = new THREE.CanvasTexture(cv); t.encoding = THREE.sRGBEncoding; return t;
+        }
+        const floor = new THREE.Mesh(
+            new THREE.CircleGeometry(46, 72),
+            new THREE.MeshStandardMaterial({ map: makeFloorTexture(), color: C(0x7d8aa6), transparent: true, roughness: 0.9, metalness: 0.0, envMapIntensity: 0.25 })
+        );
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.set(0, -0.02, -3.5);
+        floor.receiveShadow = true;
+        scene.add(floor);
+
+        // 1 m per cell: 100 cm × scale (0.05) = 5 scene units per cell.
+        const gridHelper = new THREE.GridHelper(80, 16, 0x3a4f86, 0x2a3a66);
+        gridHelper.material.transparent = true;
+        gridHelper.material.opacity = 0.28;
+        gridHelper.material.toneMapped = false;
+        gridHelper.position.y = 0.005;
+        // Align the outer left edge of the conveyor frame with a 1 m grid line.
+        gridHelper.position.x = 0.55;
+        scene.add(gridHelper);
+
+        const conveyorGroup = new THREE.Group(); 
+        scene.add(conveyorGroup);
+
+        // ==========================================
+        // ส่วนที่ 2: การคำนวณสายพาน
+        // ==========================================
+        const scale = 0.05; 
+        const SCENE_UNITS_PER_METER = 100 * scale;
+        // ขนาดจริงจากแบบ SolidWorks (ซม.): ยาวรวม 370 (=207 ระหว่างจุดศูนย์กลางโค้ง + R81.5 x2), กว้างรวม 163, หน้าสายพาน 23 (R815 / R585 มม.)
+        const tLen = 370 * scale; 
+        const tWid = 163 * scale; 
+        const bWid = 23 * scale;  
+
+        const rOut = tWid / 2; 
+        const rIn = rOut - bWid; 
+        const halfS = (tLen - tWid) / 2; 
+
+        function createOvalShape(outer, inner) {
+            const s = new THREE.Shape();
+            s.moveTo(halfS, outer);
+            s.absarc(halfS, 0, outer, Math.PI/2, -Math.PI/2, true);
+            s.lineTo(-halfS, -outer);
+            s.absarc(-halfS, 0, outer, -Math.PI/2, Math.PI/2, true);
+            s.lineTo(halfS, outer);
+
+            const h = new THREE.Path();
+            h.moveTo(halfS, inner);
+            h.lineTo(-halfS, inner);
+            h.absarc(-halfS, 0, inner, Math.PI/2, -Math.PI/2, false);
+            h.lineTo(halfS, -inner);
+            h.absarc(halfS, 0, inner, -Math.PI/2, Math.PI/2, false);
+            s.holes.push(h); 
+            return s;
+        }
+
+        const zOffset = -(rOut + rIn) / 2;
+
+        // ตั้ง curveSegments สูงเพื่อให้โค้งเรียบ ไม่เป็นเหลี่ยม
+        const EXTRUDE_SMOOTH = { bevelEnabled: false, curveSegments: 96 };
+
+        // ยกตัวสายพานทั้งชุดให้ขอบล่างของโครงสายพานสูงจากพื้น 70 ซม. (0.7 ม. = 3.5 หน่วยฉาก)
+        // เดิมขอบล่างของเฟรมอยู่ที่ 0.7 หน่วย จึงต้องยกเพิ่ม 3.5 - 0.7 = 2.8 หน่วย
+        const LIFT = 70 * scale - 0.7;
+
+        // ---------- ฐานเฟรม (pan) ----------
+        const frameShape = createOvalShape(rOut + 0.2, rIn - 0.2);
+        const frameGeo = new THREE.ExtrudeGeometry(frameShape, { depth: 0.2, ...EXTRUDE_SMOOTH });
+        const frameMat = new THREE.MeshStandardMaterial({ color: C(0x1a2335), metalness: 0.7, roughness: 0.5 });
+        const frame = new THREE.Mesh(frameGeo, frameMat);
+        frame.rotation.x = Math.PI / 2;
+        frame.position.set(0, 0.9 + LIFT, zOffset);
+        frame.castShadow = true;
+        frame.receiveShadow = true;
+        conveyorGroup.add(frame);
+
+        // ---------- ผิวสายพาน (พื้นผิวยางลายทอ) ----------
+        function makeBeltTexture() {
+            const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+            const x = cv.getContext('2d');
+            x.fillStyle = '#1a2233'; x.fillRect(0, 0, 128, 128);
+            x.lineWidth = 2;
+            x.strokeStyle = 'rgba(130,160,210,0.13)';
+            for (let i = -128; i < 256; i += 16) { x.beginPath(); x.moveTo(i, 0); x.lineTo(i + 128, 128); x.stroke(); }
+            x.strokeStyle = 'rgba(0,0,0,0.30)';
+            for (let i = -128; i < 256; i += 16) { x.beginPath(); x.moveTo(i + 8, 0); x.lineTo(i + 136, 128); x.stroke(); }
+            const t = new THREE.CanvasTexture(cv);
+            t.wrapS = t.wrapT = THREE.RepeatWrapping;
+            t.repeat.set(2.5, 2.5);
+            t.anisotropy = 8;
+            t.encoding = THREE.sRGBEncoding;
+            return t;
+        }
+        const beltShape = createOvalShape(rOut, rIn);
+        const beltGeo = new THREE.ExtrudeGeometry(beltShape, { depth: 0.12, ...EXTRUDE_SMOOTH });
+        const beltMat = new THREE.MeshStandardMaterial({ map: makeBeltTexture(), roughness: 0.82, metalness: 0.05 });
+        const belt = new THREE.Mesh(beltGeo, beltMat);
+        belt.rotation.x = Math.PI / 2;
+        belt.position.set(0, 1.07 + LIFT, zOffset);
+        belt.receiveShadow = true;
+        conveyorGroup.add(belt);
+
+        // ---------- ราวข้างสายพาน (อะลูมิเนียม) + เส้นไฟขอบ ----------
+        const railMat = new THREE.MeshStandardMaterial({ color: C(0xb4c4dc), metalness: 0.9, roughness: 0.28 });
+        const RAIL_OPTS = { depth: 0.26, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.03, bevelSegments: 3, curveSegments: 96 };
+        [createOvalShape(rOut + 0.2, rOut), createOvalShape(rIn, rIn - 0.2)].forEach(shape => {
+            const rail = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, RAIL_OPTS), railMat);
+            rail.rotation.x = Math.PI / 2;
+            rail.position.set(0, 1.19 + LIFT, zOffset);
+            rail.castShadow = true;
+            rail.receiveShadow = true;
+            conveyorGroup.add(rail);
+        });
+        const glowMat = new THREE.MeshBasicMaterial({ color: C(0x3d8bff), toneMapped: false });
+        [createOvalShape(rOut + 0.12, rOut + 0.08), createOvalShape(rIn - 0.08, rIn - 0.12)].forEach(shape => {
+            const glow = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, { depth: 0.01, ...EXTRUDE_SMOOTH }), glowMat);
+            glow.rotation.x = Math.PI / 2;
+            glow.position.set(0, 1.232 + LIFT, zOffset);
+            conveyorGroup.add(glow);
+        });
+
+        // จุดขอบเขตโมเดล (เดินตามเส้นรอบวงจริงของสายพาน) ใช้จัดเฟรมกล้อง
+        for (let k = 0; k <= 24; k++) {
+            const a = -Math.PI / 2 + (k / 24) * Math.PI;
+            [0, 1.3 + LIFT].forEach(y => {
+                fitPoints.push(new THREE.Vector3(halfS + (rOut + 0.3) * Math.cos(a), y, zOffset + (rOut + 0.3) * Math.sin(a)));
+                fitPoints.push(new THREE.Vector3(-halfS - (rOut + 0.3) * Math.cos(a), y, zOffset + (rOut + 0.3) * Math.sin(a)));
+            });
+        }
+
+        const rCenter = (rOut + rIn) / 2; 
+        const lenStraight = halfS * 2; 
+        const lenArc = Math.PI * rCenter; 
+        const totalPath = lenStraight * 2 + lenArc * 2; 
+
+        // rotY: หมุนรอบแกน Y ให้แกน x ของวัตถุชี้ไปตามทิศเดินของสายพาน (ในโค้งต้องเป็น +theta ไม่ใช่ -theta)
+        function getPathTransform(progress) {
+            let p = ((progress % 1.0) + 1.0) % 1.0; 
+            let d = p * totalPath; 
+            let pos = new THREE.Vector3(0, 0, 0); 
+            let rotY = 0; 
+
+            if (d < lenStraight) { 
+                pos.x = -halfS + d;
+                pos.z = 0; 
+                rotY = 0; 
+            } else if (d < lenStraight + lenArc) { 
+                let theta = ((d - lenStraight) / lenArc) * Math.PI;
+                pos.x = halfS + Math.sin(theta) * rCenter;
+                pos.z = zOffset + Math.cos(theta) * rCenter; 
+                rotY = theta; 
+            } else if (d < lenStraight * 2 + lenArc) { 
+                let strD = d - (lenStraight + lenArc);
+                pos.x = halfS - strD;
+                pos.z = zOffset * 2; 
+                rotY = Math.PI; 
+            } else { 
+                let theta = Math.PI + ((d - (lenStraight * 2 + lenArc)) / lenArc) * Math.PI;
+                pos.x = -halfS + Math.sin(theta) * rCenter;
+                pos.z = zOffset + Math.cos(theta) * rCenter; 
+                rotY = theta;
+            }
+            return { pos, rotY };
+        }
+
+        const stripeCount = Math.floor(totalPath / 1.5);
+        const stripeGeo = new THREE.BoxGeometry(0.08, 0.13, bWid - 0.1);
+        const stripeMat = new THREE.MeshStandardMaterial({ color: C(0x37567f), metalness: 0.15, roughness: 0.6, emissive: C(0x0a1626), emissiveIntensity: 0.6 });
+        for (let i = 0; i < stripeCount; i++) {
+            const stripe = new THREE.Mesh(stripeGeo, stripeMat);
+
+            let progress = i / stripeCount;
+            stripe.userData = { isStripe: true, progress: progress };
+
+            let t = getPathTransform(progress);
+            stripe.position.set(t.pos.x, 1.08 + LIFT, t.pos.z);
+            stripe.rotation.y = t.rotY; // ตั้งฉากกับสายพานเสมอ ทั้งช่วงตรงและช่วงโค้ง
+
+            conveyorGroup.add(stripe);
+        }
+
+        // ---------- ขา / คานรับ / ฐานปรับระดับ ----------
+        const steelMat = new THREE.MeshStandardMaterial({ color: C(0x3f5070), metalness: 0.8, roughness: 0.4 });
+        const darkSteelMat = new THREE.MeshStandardMaterial({ color: C(0x141b2b), metalness: 0.6, roughness: 0.55 });
+        const nearZ = 0, farZ = zOffset * 2;
+        const legGeo = new THREE.BoxGeometry(0.16, 0.86 + LIFT, 0.16);
+        const footGeo = new THREE.CylinderGeometry(0.15, 0.18, 0.05, 20);
+        const addMesh = (geo, mat, x, y, z, shadow = true) => {
+            const m = new THREE.Mesh(geo, mat);
+            m.position.set(x, y, z);
+            m.castShadow = shadow; m.receiveShadow = true;
+            conveyorGroup.add(m);
+            return m;
+        };
+        [-halfS, -halfS / 2, 0, halfS / 2, halfS].forEach(x => {
+            [nearZ, farZ].forEach(z => {
+                addMesh(legGeo, steelMat, x, 0.47 + LIFT / 2, z);
+                addMesh(footGeo, darkSteelMat, x, 0.025, z);
+            });
+        });
+        const stringerGeo = new THREE.BoxGeometry(halfS * 2 + 0.4, 0.1, 0.24);
+        [nearZ, farZ].forEach(z => addMesh(stringerGeo, steelMat, 0, 0.66 + LIFT, z)); // คานยาวใต้เฟรม
+        
+
+        // ==========================================
+        // ส่วนที่ 4: การสร้างประตูกล้องสแกน (Gates)
+        // ==========================================
+        const GATES = ['Gate-A', 'Gate-B', 'Gate-C'];
+
+        // ตำแหน่งเกตอิงจากระยะที่วัดจริงบนสายพาน (หน่วย ซม. เทียบสเกลเดียวกับ tLen/tWid ด้านบน)
+        // - Gate-A ห่างจากจุดเริ่มช่วงตรง (โค้งฝั่งที่กล่องวิ่งออกมาเจอ Gate-A ก่อน) 50 ซม.
+        // - Gate-B ห่างจาก Gate-A ต่อไปอีก 67.5 ซม.
+        // - Gate-C อยู่คนละฝั่งสายพาน (ฝั่งขาตรงข้าม) ห่างจากโค้งอีกฝั่งหนึ่ง (คนละฝั่งกับที่วัด Gate-A) 55 ซม.
+        const GATE1_OFFSET_CM = 62;   // จากแบบ: 207 - 65 - 80 = 62 ซม. จากศูนย์กลางโค้งซ้าย
+        const GATE_GAP_CM = 65;       // จากแบบ: Gate-A ถึง Gate-B ห่างกัน 65 ซม. (Gate-B ห่างศูนย์กลางโค้งขวา 80 ซม.)
+        const GATE3_OFFSET_CM = 65;
+
+        const gateAX = -halfS + (GATE1_OFFSET_CM * scale);
+        const gateBX = gateAX + (GATE_GAP_CM * scale);
+        const gateCX = halfS - (GATE3_OFFSET_CM * scale); // วัดจากโค้งฝั่งตรงข้าม (ฝั่ง +halfS) เข้ามา
+
+        const GATE_X = { 'Gate-A': gateAX, 'Gate-B': gateBX, 'Gate-C': gateCX };
+        const GATE_Z = { 'Gate-A': 0, 'Gate-B': 0, 'Gate-C': zOffset * 2 }; // Gate-C อยู่ฝั่งขาตรงข้าม (z ต่างจาก 0)
+
+        const gateObjects = {};
+        const gateLights = {};
+        const gateFx = {};            // เอฟเฟกต์ม่านสแกน + เส้นสแกนบนสายพาน
+        const GATE_IDLE = 0x2f6fb8;   // สีไฟตอนว่าง
+        const GATE_ACCENT = 0x4aa8ff; // สีม่านสแกนตอนว่าง
+        const CURTAIN_BASE_OPACITY = 0.10;
+
+        const gateSteelMat = new THREE.MeshStandardMaterial({ color: C(0xa3b1cc), metalness: 0.5, roughness: 0.45 });
+        const gateDarkMat = new THREE.MeshStandardMaterial({ color: C(0x10182a), metalness: 0.6, roughness: 0.35 });
+        const gateLensMat = new THREE.MeshStandardMaterial({ color: C(0x0a1c33), metalness: 0.9, roughness: 0.1, emissive: C(0x1b5fa8), emissiveIntensity: 0.6 });
+
+        // ม่านสแกน: ไล่ความจางจากล่างขึ้นบน
+        const curtainTex = (() => {
+            const cv = document.createElement('canvas'); cv.width = 4; cv.height = 128;
+            const x = cv.getContext('2d');
+            const g = x.createLinearGradient(0, 0, 0, 128);
+            g.addColorStop(0, 'rgba(255,255,255,0)'); g.addColorStop(1, 'rgba(255,255,255,1)');
+            x.fillStyle = g; x.fillRect(0, 0, 4, 128);
+            return new THREE.CanvasTexture(cv);
+        })();
+
+        function makeGateLabel(text) {
+            const cv = document.createElement('canvas'); cv.width = 512; cv.height = 128;
+            const x = cv.getContext('2d');
+            x.fillStyle = 'rgba(12,18,34,0.9)';
+            x.beginPath(); x.roundRect(8, 16, 496, 96, 26); x.fill();
+            x.strokeStyle = 'rgba(74,168,255,0.85)'; x.lineWidth = 3; x.stroke();
+            x.fillStyle = '#4aa8ff'; x.beginPath(); x.arc(58, 64, 12, 0, Math.PI * 2); x.fill();
+            x.fillStyle = '#e6f0ff'; x.font = '600 46px sans-serif';
+            x.textAlign = 'left'; x.textBaseline = 'middle';
+            x.fillText(text, 92, 66);
+            const tex = new THREE.CanvasTexture(cv);
+            tex.encoding = THREE.sRGBEncoding; tex.anisotropy = 4;
+            const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, toneMapped: false }));
+            spr.scale.set(2.4, 0.6, 1);
+            return spr;
+        }
+
+        const postGeo = new THREE.BoxGeometry(0.16, 4.0 + LIFT, 0.16);
+        const plateGeo = new THREE.BoxGeometry(0.5, 0.06, 0.5);
+
+        GATES.forEach(g => {
+            const gx = GATE_X[g] || 0;
+            const gz = GATE_Z[g] || 0; // ระยะ z ของเกตนี้ (ปกติ 0 ยกเว้น Gate-C ที่อยู่คนละฝั่งสายพาน)
+            const group = new THREE.Group();
+            const put = (geo, mat, x, y, z) => {
+                const m = new THREE.Mesh(geo, mat);
+                m.position.set(x, y, z);
+                m.castShadow = true; m.receiveShadow = true;
+                group.add(m);
+                return m;
+            };
+
+            // เสา 2 ต้น + แผ่นฐาน ยึดพื้น
+            [-1.2, 1.2].forEach(z => {
+                put(postGeo, gateSteelMat, gx, (4.0 + LIFT) / 2, gz + z);
+                put(plateGeo, gateDarkMat, gx, 0.03, gz + z);
+            });
+            // คานบน
+            put(new THREE.BoxGeometry(0.22, 0.22, 2.56), gateSteelMat, gx, 4.0 + LIFT, gz);
+            // กล่องกล้อง + เลนส์ ห้อยกลางคาน
+            put(new THREE.BoxGeometry(0.5, 0.3, 0.44), gateDarkMat, gx, 3.72 + LIFT, gz);
+            put(new THREE.CylinderGeometry(0.1, 0.12, 0.08, 24), gateLensMat, gx, 3.53 + LIFT, gz);
+
+            // แถบไฟสถานะบนคาน (ยังใช้ gateLights[g] เดิม → flashGate ทำงานเหมือนเดิม)
+            const lightMat = new THREE.MeshStandardMaterial({ color: C(GATE_IDLE), emissive: C(GATE_IDLE), emissiveIntensity: 0.7, roughness: 0.4 });
+            const lightMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 1.2, 20), lightMat);
+            lightMesh.rotation.x = Math.PI / 2;
+            lightMesh.position.set(gx, 4.22 + LIFT, gz);
+            group.add(lightMesh);
+            gateLights[g] = lightMesh;
+
+            // ม่านสแกน (ระหว่างเสา) + เส้นสแกนบนสายพาน
+            const curtainMat = new THREE.MeshBasicMaterial({
+                map: curtainTex, color: C(GATE_ACCENT), transparent: true, opacity: CURTAIN_BASE_OPACITY,
+                side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false
+            });
+            const curtain = new THREE.Mesh(new THREE.PlaneGeometry(2.24, 2.8), curtainMat);
+            curtain.rotation.y = Math.PI / 2;
+            curtain.position.set(gx, 2.5 + LIFT, gz);
+            group.add(curtain);
+
+            const lineMat = new THREE.MeshBasicMaterial({ color: C(GATE_ACCENT), toneMapped: false });
+            const scanLine = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.012, bWid - 0.02), lineMat);
+            scanLine.position.set(gx, 1.09 + LIFT, gz);
+            group.add(scanLine);
+            gateFx[g] = { curtain, line: scanLine };
+
+            // ป้ายชื่อเกต (Sprite หันเข้าหากล้องเสมอ อ่านได้ทุกมุมมอง)
+            const label = makeGateLabel(g);
+            label.position.set(gx, 5.0 + LIFT, gz);
+            group.add(label);
+
+            [-1.2, 1.2].forEach(z => {
+                fitPoints.push(new THREE.Vector3(gx, 5.4 + LIFT, gz + z));
+                fitPoints.push(new THREE.Vector3(gx, 0, gz + z));
+            });
+
+            scene.add(group);
+            gateObjects[g] = group;
+        });
+
+        // ==========================================
+        // ส่วนที่ 5: การจัดการพัสดุ และอนิเมชั่น
+        // ==========================================
+        const packages = []; 
+        
+        const pkgColors = { REJECT: 0xE24B4A, PASS: 0x378ADD, default: 0x7F77DD };
+
+        // ยอดหน้าสายพาน (ปลายลูกรีดบนสายพาน) — กล่องจะวางบนระดับนี้
+        const BELT_SURFACE_Y = 1.145 + LIFT;
+
+        // กล่องมุมมน (bevel) ให้รับแสงสวยกว่ากล่องเหลี่ยม ขนาดรวมยังเท่า w × h × d
+        function makeBoxGeo(w, h, d) {
+            const r = 0.07, b = 0.035;
+            const hw = w / 2 - b, hd = d / 2 - b;
+            const s = new THREE.Shape();
+            s.moveTo(-hw + r, -hd);
+            s.lineTo(hw - r, -hd);  s.quadraticCurveTo(hw, -hd, hw, -hd + r);
+            s.lineTo(hw, hd - r);   s.quadraticCurveTo(hw, hd, hw - r, hd);
+            s.lineTo(-hw + r, hd);  s.quadraticCurveTo(-hw, hd, -hw, hd - r);
+            s.lineTo(-hw, -hd + r); s.quadraticCurveTo(-hw, -hd, -hw + r, -hd);
+            const g = new THREE.ExtrudeGeometry(s, { depth: h - 2 * b, bevelEnabled: true, bevelThickness: b, bevelSize: b, bevelSegments: 3, curveSegments: 6 });
+            g.translate(0, 0, -(h - 2 * b) / 2);
+            g.rotateX(-Math.PI / 2);
+            return g;
+        }
+        const pkgMats = {};
+        Object.entries(pkgColors).forEach(([k, v]) => {
+            pkgMats[k] = new THREE.MeshStandardMaterial({ color: C(v), emissive: C(v), emissiveIntensity: 0.08, roughness: 0.5, metalness: 0.05 });
+        });
+
+        // ความเร็วบนฉาก ใช้หน่วย scene units/second และเริ่มหยุดจนกว่าจะได้รับค่า PLC
+        let conveyorSpeedSceneUnitsPerSec = 0;
+
+        // เรียกทุกครั้งที่ได้รับข้อความสถานะ/ความเร็วจาก PLC ผ่าน Node-RED
+        // รูปแบบข้อมูลที่รองรับ: { is_running, frequency_hz, motor_rpm, shaft_rpm, speed_m_per_min, speed_m_per_sec }
+        function applyPlcSpeedData(d) {
+            const speedPerSec = Number(d.speed_m_per_sec);
+            const speedPerMin = Number(d.speed_m_per_min);
+            const speedMPerSec = Number.isFinite(speedPerSec)
+                ? Math.max(speedPerSec, 0)
+                : Number.isFinite(speedPerMin) ? Math.max(speedPerMin, 0) / 60 : 0;
+            const running = d.is_running === undefined
+                ? speedMPerSec > 0
+                : d.is_running === true || d.is_running === 1 || d.is_running === 'true' || d.is_running === '1';
+
+            // 1 m = 100 cm × scale (0.05) = 5 scene units; ไม่มีการเร่งความเร็วเพื่อความสวยงาม
+            conveyorSpeedSceneUnitsPerSec = running ? speedMPerSec * SCENE_UNITS_PER_METER : 0;
+
+            const speedStat = document.getElementById('s-speed');
+            if (speedStat) {
+                speedStat.textContent = running ? `${speedMPerSec.toFixed(3)} m/s` : '0 m/s (หยุด)';
+            }
+        }
+
+        let stats = { total: 0, passCount: 0, rejectCount: 0, tags: new Set() };
+        function updateStats(data) {
+            // นับสถิติเมื่อผ่าน Gate A เท่านั้น ป้องกันตัวเลขเบิ้ล
+            if (data.gate_name === 'Gate-A') {
+                stats.total++;
+                if (data.status === 'PASS') stats.passCount++;
+                if (data.status === 'REJECT') stats.rejectCount++;
+            }
+            if (data.tag_id) stats.tags.add(String(data.tag_id));
+            
+            document.getElementById('s-total').textContent = stats.total;
+            document.getElementById('s-pass').textContent = stats.passCount;
+            document.getElementById('s-reject').textContent = stats.rejectCount;
+            document.getElementById('s-tags').textContent = stats.tags.size; 
+
+            // แถบสัดส่วน PASS / REJECT + อัตราผ่าน
+            const decided = stats.passCount + stats.rejectCount;
+            const passPct = decided ? (stats.passCount / decided) * 100 : 0;
+            const rejPct = decided ? (stats.rejectCount / decided) * 100 : 0;
+            document.getElementById('ratio-pass').style.width = passPct + '%';
+            document.getElementById('ratio-reject').style.width = rejPct + '%';
+            document.getElementById('s-rate').textContent = decided ? Math.round(passPct) + '%' : '-';
+        }
+
+        function flashGate(gateName, status) {
+            const lm = gateLights[gateName];
+            if (!lm) return;
+            const col = pkgColors[status] || pkgColors.default;
+            lm.material.color.copy(C(col));
+            lm.material.emissive.copy(C(col));
+            lm.material.emissiveIntensity = 3.0;
+            const fx = gateFx[gateName];
+            if (fx) {
+                fx.curtain.material.color.copy(C(col));
+                fx.curtain.material.opacity = 0.5;   // ค่อย ๆ จางกลับใน animate()
+                fx.line.material.color.copy(C(col));
+            }
+            setTimeout(() => {
+                lm.material.color.copy(C(GATE_IDLE));
+                lm.material.emissive.copy(C(GATE_IDLE));
+                lm.material.emissiveIntensity = 0.7;
+                if (fx) {
+                    fx.curtain.material.color.copy(C(GATE_ACCENT));
+                    fx.line.material.color.copy(C(GATE_ACCENT));
+                }
+            }, 800);
+        }
+
+        function spawnRandomPackage() {
+            const tag_id = 'TAG-' + Math.floor(Math.random() * 90000 + 10000);
+            
+            const statusList = ['Check In', 'Processing', 'Completed', 'REJECT'];
+            const status = statusList[Math.floor(Math.random() * statusList.length)];
+            const mat = pkgMats[status] || pkgMats['default'];
+
+            const w = 0.5 + Math.random() * 0.3;
+            const h = 0.4 + Math.random() * 0.3;
+            const d = 0.5 + Math.random() * 0.3;
+            const geo = makeBoxGeo(w, h, d);
+            const mesh = new THREE.Mesh(geo, mat.clone());
+            mesh.castShadow = true;
+            scene.add(mesh);
+
+            const tagCv = document.createElement('canvas');
+            tagCv.width = 256; tagCv.height = 64;
+            const tc = tagCv.getContext('2d');
+            tc.fillStyle = 'rgba(0,0,0,0.7)';
+            tc.roundRect(2, 2, 252, 60, 8);
+            tc.fill();
+            tc.fillStyle = '#ffffff';
+            tc.font = '18px monospace';
+            tc.textAlign = 'center';
+            tc.textBaseline = 'middle';
+            tc.fillText(tag_id, 128, 32);
+            const tagTex = new THREE.CanvasTexture(tagCv);
+            tagTex.encoding = THREE.sRGBEncoding;
+            const tagGeo = new THREE.PlaneGeometry(0.8, 0.2);
+            const tagMat = new THREE.MeshBasicMaterial({ map: tagTex, transparent: true, toneMapped: false });
+            const tagMesh = new THREE.Mesh(tagGeo, tagMat);
+            tagMesh.rotation.x = -Math.PI / 2; 
+            tagMesh.position.set(0, h / 2 + 0.01, 0);
+            mesh.add(tagMesh);
+
+            // ----------------------------------------------------
+            // แก้ไขจุดเกิด: ให้เกิดในโค้งซ้าย (ประมาณ % ที่ 95 ของ 1 รอบ)
+            // พอเกิดปุ๊บ กล่องจะวิ่งออกจากโค้งมาหา Gate A เป็นจุดแรกเสมอ
+            // ----------------------------------------------------
+            let startProgress = 0.95; 
+            let t = getPathTransform(startProgress);
+            mesh.userData.baseY = BELT_SURFACE_Y + h / 2;
+            mesh.position.set(t.pos.x, mesh.userData.baseY, t.pos.z);
+            mesh.rotation.y = t.rotY;
+
+            packages.push({ 
+                mesh, 
+                tag_id: tag_id,           
+                status: status,           
+                progress: startProgress, 
+                distanceTraveled: 0,     
+                done: false,
+                isRejected: false, 
+                detectedGates: new Set()  
+            });
+        }
+
+        function triggerDetection(pkg, gateName) {
+            flashGate(gateName, pkg.status);
+
+            const data = {
+                tag_id: pkg.tag_id,
+                gate_name: gateName,
+                status: pkg.status,
+                event_time: new Date().toISOString()
+            };
+
+            updateStats(data);
+
+            if (dataTable) {
+                let displayTime = new Date(data.event_time).toLocaleString('th-TH');
+                dataTable.row.add([
+                    data.tag_id,
+                    data.gate_name,
+                    data.status,
+                    displayTime
+                ]).draw(false); 
+            }
+        }
+
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate); 
+            
+            const dt = clock.getDelta();
+            const travel = conveyorSpeedSceneUnitsPerSec * dt;
+
+            packages.forEach((p, i) => {
+                if (p.done) return;
+                
+                if (p.isRejected) {
+                    const floorY = p.mesh.userData.baseY - BELT_SURFACE_Y; // ครึ่งความสูงกล่อง = วางบนพื้น
+                    if (p.mesh.position.y > floorY) {
+                        p.mesh.position.z += 3 * dt; 
+                        p.mesh.position.y -= 4 * dt; 
+                        p.mesh.rotation.x += 6 * dt; 
+                        if (p.mesh.position.y <= floorY) {
+                            p.mesh.position.y = floorY;
+                            p.mesh.rotation.x = Math.round(p.mesh.rotation.x / (Math.PI / 2)) * (Math.PI / 2); // ตะแคงให้แนบพื้น
+                        }
+                    } else {
+                        p.restTime = (p.restTime || 0) + dt; // นอนอยู่บนพื้นสักครู่แล้วค่อยหายไป
+                        if (p.restTime > 1.5) {
+                            scene.remove(p.mesh);
+                            p.done = true;
+                        }
+                    }
+                    return; 
+                }
+                
+                p.progress += travel / totalPath; 
+                p.distanceTraveled += travel;
+                
+                let t = getPathTransform(p.progress);
+                p.mesh.position.set(t.pos.x, p.mesh.userData.baseY, t.pos.z);
+                p.mesh.rotation.y = t.rotY;
+                
+                for (const [gateName, gx] of Object.entries(GATE_X)) {
+                    const gz = GATE_Z[gateName] || 0;
+                    const dx = p.mesh.position.x - gx;
+                    const dz = p.mesh.position.z - gz; 
+                    const distance = Math.sqrt(dx * dx + dz * dz); 
+
+                    if (distance < 1.2 && !p.detectedGates.has(gateName)) {
+                        p.detectedGates.add(gateName); 
+                        triggerDetection(p, gateName); 
+                        
+                        if (gateName === 'Gate-B' && p.status === 'REJECT') {
+                            p.isRejected = true; 
+                        }
+                    }
+                    else if (distance > 2.5 && p.detectedGates.has(gateName)) {
+                        p.detectedGates.delete(gateName);
+                    }
+                }
+                
+                // ขยายระยะวิ่งก่อนทำลายกล่องเล็กน้อย เผื่อจุดเกิดถอยไปไกลขึ้น
+                if (p.distanceTraveled >= totalPath * 1.5) {
+                    scene.remove(p.mesh);
+                    p.done = true;
+                }
+            });
+            
+            for (let i = packages.length - 1; i >= 0; i--) {
+                if (packages[i].done) packages.splice(i, 1);
+            }
+
+            conveyorGroup.children.forEach(c => {
+                if (c.userData.isStripe) {
+                    c.userData.progress += travel / totalPath; 
+                    if (c.userData.progress >= 1.0) c.userData.progress -= 1.0; 
+                    
+                    let t = getPathTransform(c.userData.progress);
+                    c.position.set(t.pos.x, 1.08 + LIFT, t.pos.z);
+                    c.rotation.y = t.rotY; // ตั้งฉากกับสายพานตลอดเส้นทาง ทั้งตรงและโค้ง
+                }
+            });
+
+            // ม่านสแกนของเกตค่อย ๆ จางกลับสู่ค่าปกติหลังแฟลช
+            const fade = Math.min(1, dt * 4);
+            Object.values(gateFx).forEach(fx => {
+                fx.curtain.material.opacity += (CURTAIN_BASE_OPACITY - fx.curtain.material.opacity) * fade;
+            });
+
+            renderer.render(scene, camera);
+        }
+        animate(); 
+
+        function onResize() {
+            const wrap = document.getElementById('canvas-wrap');
+            if(!wrap) return;
+            const w = wrap.clientWidth;
+            const h = wrap.clientHeight;
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+            frameCamera();
+            renderer.setSize(w, h, false);
+        }
+        window.addEventListener('resize', onResize);
+        if (window.ResizeObserver) new ResizeObserver(onResize).observe(document.getElementById('canvas-wrap'));
+        setTimeout(onResize, 100);
+
+        // ==========================================
+        // ส่วนที่ 6: การทำงานของ DATATABLES และ MQTT
+        // ==========================================
+        let dataTable;
+
+        $(document).ready(function () {
+            const esc = (v) => $('<div>').text(v == null ? '' : v).html();
+            dataTable = $('#dataTable').DataTable({
+                "order": [[ 3, "desc" ]],
+                "columnDefs": [
+                    { targets: [0, 3], className: 'mono' },
+                    { targets: 2, render: function (data, type) {
+                        if (type !== 'display') return data;
+                        const cls = data === 'REJECT' ? 'chip-reject' : data === 'PASS' ? 'chip-pass' : 'chip-other';
+                        return '<span class="chip ' + cls + '">' + esc(data) + '</span>';
+                    } }
+                ],
+                "language": {
+                    "search": "ค้นหา",
+                    "lengthMenu": "แสดง _MENU_ แถว",
+                    "info": "แสดง _START_–_END_ จาก _TOTAL_ รายการ",
+                    "infoEmpty": "ยังไม่มีรายการ",
+                    "infoFiltered": "(กรองจาก _MAX_ รายการ)",
+                    "zeroRecords": "ไม่พบรายการที่ตรงกัน",
+                    "emptyTable": "ยังไม่มีการสแกน รอข้อมูลจาก MQTT หรือกด \"สุ่ม 1 กล่อง\" เพื่อจำลอง",
+                    "paginate": { "previous": "ก่อนหน้า", "next": "ถัดไป" }
+                }
+            });
+
+            const broker = "ma0ef1a1.ala.asia-southeast1.emqxsl.com"; 
+            const port = 8084; 
+            const clientId = "web_client_" + Math.random().toString(16).substr(2, 8);
+            const username = "pawaret";
+            const password = "1111";
+            const topic = "test/wipdata"; 
+            // ข้อความสถานะ/ความเร็วของ PLC จาก topic "Cvyer" (มีฟิลด์ is_running, frequency_hz, motor_rpm ฯลฯ)
+            // ถ้าจริง ๆ แล้ว Node-RED ส่งข้อมูลนี้มาที่ topic เดียวกับ "test/wipdata" อยู่แล้ว
+            // ก็ไม่ต้องแก้อะไร เพราะโค้ดจะแยกประเภทข้อความจากรูปแบบ payload ให้อัตโนมัติ
+            const topicStatus = "Cvyer";
+
+            const client = new Paho.MQTT.Client(broker, port, clientId);
+
+            client.onConnectionLost = onConnectionLost;
+            client.onMessageArrived = onMessageArrived;
+
+            const options = {
+                useSSL: true,
+                userName: username,
+                password: password,
+                onSuccess: onConnect, 
+                onFailure: function (message) { 
+                    $('#mqtt-status').removeClass('alert-warning alert-success').addClass('alert-danger');
+                    $('#mqtt-status').html("<strong>การเชื่อมต่อล้มเหลว:</strong> " + message.errorMessage);
+                    setStatus3D('error', 'เชื่อมต่อไม่ได้: ' + message.errorMessage);
+                }
+            };
+
+            client.connect(options);
+
+            function onConnect() {
+                $('#mqtt-status').removeClass('alert-warning alert-danger').addClass('alert-success');
+                $('#mqtt-status').html("<strong>เชื่อมต่อ MQTT สำเร็จ!</strong> (โหมด Simulation & Sorting)");
+                setStatus3D('connected', 'พร้อมทำงาน');
+                client.subscribe(topic); 
+                client.subscribe(topicStatus);
+            }
+
+            function onConnectionLost(responseObject) {
+                if (responseObject.errorCode !== 0) {
+                    $('#mqtt-status').removeClass('alert-success alert-warning').addClass('alert-danger');
+                    $('#mqtt-status').html("<strong>หลุดการเชื่อมต่อ:</strong> " + responseObject.errorMessage);
+                    setStatus3D('error', 'หลุดการเชื่อมต่อ');
+                }
+            }
+
+            function setStatus3D(cls, msg) {
+                const badge = document.getElementById('status-badge');
+                if(badge){
+                    badge.className = 'hud-badge ' + cls;
+                    badge.textContent = msg;
+                }
+            }
+
+            // แปลงวันที่แบบไทย "D/M/พ.ศ. H:mm:ss" (เช่น "8/8/2569 16:49:59") เป็น ISO string
+            function parseThaiTimestamp(str) {
+                if (!str) return null;
+                const m = String(str).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})$/);
+                if (!m) return null;
+                const [, day, month, beYear, hh, mm, ss] = m;
+                const ceYear = parseInt(beYear, 10) - 543;
+                const d = new Date(ceYear, parseInt(month, 10) - 1, parseInt(day, 10), hh, mm, ss);
+                return isNaN(d.getTime()) ? null : d.toISOString();
+            }
+
+            // แปลง payload จากอุปกรณ์จริง (workpiece_id/gate/timestamp) ให้เป็นรูปแบบที่โค้ดฝั่งนี้ใช้
+            function normalizeIncoming(raw) {
+                if (!raw || typeof raw !== 'object') return null;
+                const tag_id = raw.tag_id || raw.workpiece_id;
+                const gate_name = raw.gate_name || raw.gate;
+                const status = raw.status;
+                const event_time = raw.event_time || parseThaiTimestamp(raw.timestamp) || raw.timestamp;
+                if (!tag_id || !gate_name || !status || !event_time || isNaN(new Date(event_time).getTime())) {
+                    return null;
+                }
+                return { tag_id, gate_name, status, event_time };
+            }
+
+            function onMessageArrived(message) {
+                console.log("MQTT Received:", message.payloadString);
+
+                let raw;
+                try {
+                    raw = JSON.parse(message.payloadString);
+                } catch (e) {
+                    console.warn("ข้อความ MQTT ไม่ใช่ JSON ที่ถูกต้อง ข้ามข้อความนี้:", message.payloadString);
+                    return;
+                }
+
+                // ข้อความความเร็ว/สถานะจาก PLC จะมีฟิลด์พวกนี้ ต่างจากข้อความคัดแยกกล่อง (tag_id/gate/status)
+                const isSpeedTelemetry = raw && typeof raw === 'object' &&
+                    ('motor_rpm' in raw || 'frequency_hz' in raw || 'speed_m_per_sec' in raw || 'is_running' in raw);
+
+                if (isSpeedTelemetry) {
+                    applyPlcSpeedData(raw);
+                    return;
+                }
+
+                const data = normalizeIncoming(raw);
+                if (!data) {
+                    console.warn("ข้อความ MQTT มีฟิลด์ไม่ครบ/ไม่ถูกต้อง ข้ามข้อความนี้:", raw);
+                    return;
+                }
+
+                spawnPackageFromMQTT(data);
+
+                updateStats(data);
+                if (dataTable) {
+                    let displayTime = new Date(data.event_time).toLocaleString('th-TH');
+                    dataTable.row.add([
+                        data.tag_id,
+                        data.gate_name,
+                        data.status,
+                        displayTime
+                    ]).draw(false); 
+                }
+                //สั้งไฟกระพิบ
+                flashGate(data.gate_name, data.status);
+            }
+            
+        });
+        // ฟังก์ชันนี้จะสร้างพัสดุใหม่จากข้อมูลที่ได้รับทาง MQTT
+        function spawnPackageFromMQTT(data) {
+            const status = (data.status === 'REJECT') ? 'Rejected' : 'Approved';
+            const mat = pkgMats[status] || pkgMats['default'];
+
+            const w = 0.5 + Math.random() * 0.3;
+            const h = 0.4 + Math.random() * 0.3;
+            const d = 0.5 + Math.random() * 0.3;
+            const geo = makeBoxGeo(w, h, d);
+            const mesh = new THREE.Mesh(geo, mat.clone());
+            mesh.castShadow = true;
+            scene.add(mesh);
+
+            // label tag_id จาก MQTT จริง
+            const tagCv = document.createElement('canvas');
+            tagCv.width = 256; tagCv.height = 64;
+            const tc = tagCv.getContext('2d');
+            tc.fillStyle = 'rgba(0,0,0,0.7)';
+            tc.roundRect(2, 2, 252, 60, 8);
+            tc.fill();
+            tc.fillStyle = '#ffffff';
+            tc.font = '18px monospace';
+            tc.textAlign = 'center';
+            tc.textBaseline = 'middle';
+            tc.fillText(String(data.tag_id || 'MQTT'), 128, 32);
+            const tagTex = new THREE.CanvasTexture(tagCv);
+            tagTex.encoding = THREE.sRGBEncoding;
+            const tagGeo = new THREE.PlaneGeometry(0.8, 0.2);
+            const tagMat = new THREE.MeshBasicMaterial({ map: tagTex, transparent: true, toneMapped: false });
+            const tagMesh = new THREE.Mesh(tagGeo, tagMat);
+            tagMesh.rotation.x = -Math.PI / 2;
+            tagMesh.position.set(0, h / 2 + 0.01, 0);
+            mesh.add(tagMesh);
+
+            let startProgress = 0.95;
+            let t = getPathTransform(startProgress);
+            mesh.userData.baseY = BELT_SURFACE_Y + h / 2;
+            mesh.position.set(t.pos.x, mesh.userData.baseY, t.pos.z);
+            mesh.rotation.y = t.rotY;
+
+            packages.push({
+                mesh,
+                tag_id: String(data.tag_id || 'MQTT'),
+                status: status,
+                progress: startProgress,
+                distanceTraveled: 0,
+                done: false,
+                isRejected: (status === 'REJECT'),
+                detectedGates: new Set()
+            });
+        }
+
+        // ==========================================
+        // ส่วนที่ 7: UI Controls จำลองข้อมูล
+        // ==========================================
+        function sendFake() {
+            spawnRandomPackage();
+        }
+
+        function spawnMultiple() {
+            for(let i=0; i<5; i++) {
+                setTimeout(spawnRandomPackage, i * 800); 
+            }
+        }
+    </script>
+</body>
+</html>
