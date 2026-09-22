@@ -989,24 +989,28 @@
             });
         }
 
+        // บันทึกเหตุการณ์ผ่านเกต 1 ครั้ง (กระพริบไฟ + สถิติ + แถวใน log table)
+        // ใช้ร่วมกันทั้งจาก physics-detection (กล่องวิ่งผ่านตำแหน่งเกตจริงในฉาก 3D)
+        // และจากข้อความ MQTT จริงที่เพิ่งได้รับ เพื่อไม่ให้มี 2 จุดเขียน log แยกกัน
+        function logGateEvent(evt) {
+            flashGate(evt.gate_name, evt.status);
+            updateStats(evt);
+            if (dataTable) {
+                let displayTime = new Date(evt.event_time).toLocaleString('th-TH');
+                dataTable.row.add([
+                    evt.tag_id,
+                    evt.gate_name,
+                    evt.status,
+                    displayTime
+                ]).draw(false);
+            }
+        }
+
+        // เรียกจาก physics-detection ตอนกล่องใน 3D วิ่งผ่านตำแหน่งเกตจริง
+        // ทำแค่กระพริบไฟให้ตรงกับการเคลื่อนที่ (ภาพ/ความรู้สึกสมจริง) เท่านั้น
+        // ไม่ลงตาราง/ไม่นับสถิติ เพราะข้อมูลที่นับได้ต้องมาจากอุปกรณ์จริง (MQTT) เท่านั้น
         function triggerDetection(pkg, gateName) {
             flashGate(gateName, pkg.status);
-            const data = {
-                tag_id: pkg.tag_id,
-                gate_name: gateName,
-                status: pkg.status,
-                event_time: new Date().toISOString()
-            };
-            updateStats(data);
-            if (dataTable) {
-                let displayTime = new Date(data.event_time).toLocaleString('th-TH');
-                dataTable.row.add([
-                    data.tag_id,
-                    data.gate_name,
-                    data.status,
-                    displayTime
-                ]).draw(false); 
-            }
         }
 
         const clock = new THREE.Clock();
@@ -1057,6 +1061,7 @@
                         if (p.restTime > 1.5) {
                             scene.remove(p.mesh);
                             p.done = true;
+                            activeTagPackages.delete(p.tag_id);
                         }
                     }
                     return; 
@@ -1103,6 +1108,7 @@
                 if (p.distanceTraveled >= totalPath * 1.5) {
                     scene.remove(p.mesh);
                     p.done = true;
+                    activeTagPackages.delete(p.tag_id);
                 }
             });
             
@@ -1162,6 +1168,8 @@
         // ส่วนที่ 6: การทำงานของ DATATABLES และ MQTT
         // ==========================================
         let dataTable;
+        // เก็บอ้างอิงกล่อง 3D ที่กำลังวิ่งอยู่บนสายพาน ต่อ 1 tag_id (ใช้ทั้งใน onMessageArrived และ animate)
+        const activeTagPackages = new Map(); // tag_id -> package object
 
         $(document).ready(function () {
             const esc = (v) => $('<div>').text(v == null ? '' : v).html();
@@ -1265,6 +1273,14 @@
             const RFID_DEBOUNCE_MS = 2000;
             const lastReadByTag = new Map(); // tag_id -> { gate_name, time }
 
+            // ---------- แม็ปชื่อเกตจากเครื่องอ่าน RFID จริง -> ชื่อเกตภายในของโมเดล 3D ----------
+            // ปรับ key ฝั่งซ้ายให้ตรงกับ gate_name ที่เครื่องอ่านแต่ละตัวส่งมาจริง ถ้าไม่ตรงตามนี้
+            const GATE_NAME_MAP = {
+                'RFID_GATE1': 'Gate-A', // เสาหนึ่ง
+                'RFID_GATE2': 'Gate-B', // เสาสอง (จุดเกิดพัสดุ)
+                'RFID_GATE3': 'Gate-C'  // เสาสาม
+            };
+
             function onMessageArrived(message) {
                 console.log("MQTT Received:", message.payloadString);
 
@@ -1290,6 +1306,9 @@
                     return;
                 }
 
+                // แปลงชื่อเกตจากฮาร์ดแวร์จริง (เช่น RFID_GATE1) ให้เป็นชื่อภายใน (Gate-A/B/C)
+                data.gate_name = GATE_NAME_MAP[data.gate_name] || data.gate_name;
+
                 // กันแท็กเดิม+ประตูเดิมที่ถูกอ่านซ้ำรัวๆ ภายในช่วง debounce
                 const now = Date.now();
                 const lastRead = lastReadByTag.get(data.tag_id);
@@ -1299,18 +1318,30 @@
                 }
                 lastReadByTag.set(data.tag_id, { gate_name: data.gate_name, time: now });
 
-                spawnPackageFromMQTT(data);
-                updateStats(data);
-                if (dataTable) {
-                    let displayTime = new Date(data.event_time).toLocaleString('th-TH');
-                    dataTable.row.add([
-                        data.tag_id,
-                        data.gate_name,
-                        data.status,
-                        displayTime
-                    ]).draw(false); 
+                if (data.gate_name === 'Gate-B') {
+                    // เสาสอง = จุดเกิดพัสดุ -> สร้างกล่อง 3D ใหม่เสมอ
+                    const pkg = spawnPackageFromMQTT(data);
+                    activeTagPackages.set(data.tag_id, pkg);
+                } else {
+                    // เสาอื่น (Gate-A / Gate-C) -> ใช้กล่องเดิมที่วิ่งอยู่แล้ว ไม่ spawn ซ้ำ
+                    const pkg = activeTagPackages.get(data.tag_id);
+                    if (pkg) {
+                        pkg.status = data.status; // อัปเดตผลตัดสินล่าสุด (เผื่อเพิ่งรู้ผล PASS/REJECT ที่เกตนี้)
+                        pkg.detectedGates.add(data.gate_name); // กัน physics-detection ลง log ซ้ำตอนกล่องวิ่งผ่านจริง
+
+                        // รู้ผล REJECT จากของจริงเมื่อไร ให้กล่องเปลี่ยนเป็นสีแดงทันที
+                        // (ไม่ต้องรอถึงไม้กั้นค่อยเปลี่ยน สีต้องตามผลตัดสินจริง)
+                        if (data.status === 'REJECT') {
+                            const rejectMat = pkgMats['REJECT'];
+                            if (rejectMat) pkg.mesh.material.color.copy(rejectMat.color);
+                            if (rejectMat) pkg.mesh.material.emissive.copy(rejectMat.emissive);
+                        }
+                    } else {
+                        console.warn(`ไม่พบกล่องของแท็ก ${data.tag_id} บนสายพาน (อาจพลาดข้อความจาก Gate-B) — บันทึกผลไว้แต่ไม่มีกล่องแสดง`);
+                    }
                 }
-                flashGate(data.gate_name, data.status);
+
+                logGateEvent(data);
             }
         });
 
@@ -1355,7 +1386,7 @@
             mesh.position.set(t.pos.x, mesh.userData.baseY, t.pos.z);
             mesh.rotation.y = t.rotY;
 
-            packages.push({
+            const pkg = {
                 mesh,
                 tag_id: String(data.tag_id || 'MQTT'),
                 status: data.status,
@@ -1367,7 +1398,9 @@
                 // จุดเกิด = ตำแหน่ง Gate-B พอดี ถือว่า "ผ่าน Gate-B" ไปแล้วตั้งแต่เกิด
                 // กันไม่ให้ระบบตรวจจับระยะทางลง log ซ้ำกับข้อความ MQTT ที่เพิ่งได้รับมา
                 detectedGates: new Set(['Gate-B'])
-            });
+            };
+            packages.push(pkg);
+            return pkg;
         }
 
         // ==========================================
