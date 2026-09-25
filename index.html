@@ -264,6 +264,9 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
 
     <script>
+        // ==========================================
+        // Global Variables สำหรับการใช้งานในหลายๆ ฟังก์ชัน
+        // ==========================================
         let dataTable = null;
         const activeTagPackages = new Map(); 
         const packages = []; 
@@ -279,6 +282,9 @@
             activeTagPackages.delete(p.tag_id);
         }
 
+        // ==========================================
+        // THREE.JS Setup
+        // ==========================================
         const canvas = document.getElementById('c');
         const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)); 
@@ -415,6 +421,9 @@
         const conveyorGroup = new THREE.Group(); 
         scene.add(conveyorGroup);
 
+        // ==========================================
+        // สายพาน (แยกชิ้น ตรง 2 โค้ง 2)
+        // ==========================================
         const scale = 0.05; 
         const SCENE_UNITS_PER_METER = 100 * scale;
         const tLen = 375 * scale; 
@@ -429,8 +438,8 @@
         const LIFT = 70 * scale - 0.7;
 
         function createSeparateShapes(outer, inner) {
-            const gapL = 0.15; 
-            const gapA = 0.025; 
+            const gapL = 0.15; // รอยแยกทางตรง (ลูกกลิ้งลงพอดี)
+            const gapA = 0.025; // รอยแยกทางโค้ง
             
             const straightTop = new THREE.Shape();
             straightTop.moveTo(halfS - gapL, outer);
@@ -514,6 +523,7 @@
             conveyorGroup.add(glow);
         });
 
+        // ลูกกลิ้งตรงรอยต่อ
         const rollerGeo = new THREE.CylinderGeometry(0.12, 0.12, bWid - 0.05, 16);
         const rollerMat = new THREE.MeshStandardMaterial({ color: C(0x2d3445), metalness: 0.6, roughness: 0.4 });
         const addRoller = (x, z) => {
@@ -617,6 +627,9 @@
         const stringerGeo = new THREE.BoxGeometry(halfS * 2 + 0.4, 0.1, 0.24);
         [nearZ, farZ].forEach(z => addMesh(stringerGeo, steelMat, 0, 0.66 + LIFT, z)); 
         
+        // ==========================================
+        // ประตูกล้องสแกน (Gates) & ไม้กั้น (Diverter)
+        // ==========================================
         const GATES = ['Gate-A', 'Gate-B', 'Gate-C'];
         const GATE1_OFFSET_CM = 65;   
         const GATE_GAP_CM = 80;       
@@ -629,9 +642,8 @@
         const GATE_X = { 'Gate-A': gateAX, 'Gate-B': gateBX, 'Gate-C': gateCX };
         const GATE_Z = { 'Gate-A': 0, 'Gate-B': 0, 'Gate-C': zOffset * 2 }; 
         
-        // Progress for Synchronization
         const gateProgressMap = {
-            'Gate-A': (GATE1_OFFSET_CM * scale) / totalPath, // Actually not used for syncing since package drops here
+            'Gate-A': (GATE1_OFFSET_CM * scale) / totalPath, 
             'Gate-B': ((GATE1_OFFSET_CM + GATE_GAP_CM) * scale) / totalPath,
             'Gate-C': (lenStraight + lenArc + (GATE3_OFFSET_CM * scale)) / totalPath
         };
@@ -784,7 +796,9 @@
             diverterSwingActive = true;
         }
 
-        // Debug Panels
+        // ==========================================
+        // ระบบไม้บรรทัด & Debug
+        // ==========================================
         const debugRulerGroup = new THREE.Group();
         debugRulerGroup.visible = false;
         scene.add(debugRulerGroup);
@@ -867,6 +881,9 @@
             body.innerHTML = lines.join('\n');
         }
 
+        // ==========================================
+        // ระบบชิ้นงาน (Packages)
+        // ==========================================
         function isRejectStatus(status) { return String(status || '').trim().toUpperCase() === 'REJECT'; }
         function isCompleteStatus(status) { 
             const s = String(status || '').trim().toUpperCase();
@@ -1037,13 +1054,21 @@
 
         const clock = new THREE.Clock();
 
+        // ------------------------------------------
+        // CALIBRATION: ปรับจูนให้ 3D วิ่งช้าลง 23% เพื่อให้ตรงกับฮาร์ดแวร์จริงที่ B->C 15.4 วิ
+        // ------------------------------------------
+        const CALIBRATION_FACTOR = 0.77; 
+
         function getSpeedAtProgress(progress) {
             let p = ((progress % 1.0) + 1.0) % 1.0; 
             let d = p * totalPath; 
-            if (d < lenStraight) return speedStraightUnitsPerSec; 
-            else if (d < lenStraight + lenArc) return speedCurveUnitsPerSec;    
-            else if (d < lenStraight * 2 + lenArc) return speedStraightUnitsPerSec; 
-            else return speedCurveUnitsPerSec;    
+            let baseSpeed = speedStraightUnitsPerSec;
+            if (d < lenStraight) baseSpeed = speedStraightUnitsPerSec; 
+            else if (d < lenStraight + lenArc) baseSpeed = speedCurveUnitsPerSec;    
+            else if (d < lenStraight * 2 + lenArc) baseSpeed = speedStraightUnitsPerSec; 
+            else baseSpeed = speedCurveUnitsPerSec;    
+            
+            return baseSpeed * CALIBRATION_FACTOR;
         }
 
         function animate() {
@@ -1061,15 +1086,15 @@
             packages.forEach((p, i) => {
                 if (p.done) return;
                 
-                // ระบบจับเวลา Timeout
-                if (isConveyorRunning) {
+                // ระบบจับเวลา Timeout (ตรวจจับของค้าง/หาย)
+                if (isConveyorRunning && speedStraightUnitsPerSec > 0) {
                     p.timeSinceLastGate += dt;
-                    if (p.lastGate === 'Gate-B' && p.timeSinceLastGate > 20) {
+                    if (p.lastGate === 'Gate-B' && p.timeSinceLastGate > 25) {
                         logGateEvent({ tag_id: p.tag_id, gate_name: 'System', status: 'TIMEOUT', event_time: new Date().toISOString(), gate_name_raw: 'System' });
                         removePackage(p);
                         return;
                     }
-                    if (p.lastGate === 'Gate-C' && p.timeSinceLastGate > 25) {
+                    if (p.lastGate === 'Gate-C' && p.timeSinceLastGate > 28) {
                         logGateEvent({ tag_id: p.tag_id, gate_name: 'System', status: 'TIMEOUT', event_time: new Date().toISOString(), gate_name_raw: 'System' });
                         removePackage(p);
                         return;
@@ -1095,10 +1120,10 @@
                     return; 
                 }
                 
-                // ระบบหน่วงความเร็วที่รอยต่อ
+                // ระบบหน่วงความเร็วที่รอยต่อ (Stutter)
                 let current_d = (p.progress % 1.0) * totalPath;
                 let speedMultiplier = 1.0;
-                const SLOW_ZONE = 0.20; 
+                const SLOW_ZONE = 0.28; 
                 const joints = [0, lenStraight, lenStraight + lenArc, lenStraight * 2 + lenArc, totalPath];
                 
                 for (let jd of joints) {
@@ -1107,7 +1132,7 @@
                     if (jd === totalPath && current_d < SLOW_ZONE) dist = current_d;
                     
                     if (dist < SLOW_ZONE) {
-                        speedMultiplier = 0.65; 
+                        speedMultiplier = 0.65; // ชะลอความเร็วให้เหลือ 65% เมื่อผ่านรอยต่อ
                         break;
                     }
                 }
@@ -1120,7 +1145,7 @@
                 p.mesh.position.set(t.pos.x, p.mesh.userData.baseY, t.pos.z);
                 p.mesh.rotation.y = t.rotY;
                 
-                // ตรวจจับกล่องวิ่งผ่านเซนเซอร์จริงในจอ
+                // ตรวจจับกล่องวิ่งผ่านเซนเซอร์เกตจริงใน 3D (Physics Detection)
                 for (const [gateName, gx] of Object.entries(GATE_X)) {
                     const gz = GATE_Z[gateName] || 0;
                     const dx = p.mesh.position.x - gx;
@@ -1136,16 +1161,13 @@
                     }
                 }
 
-                // การคัดทิ้งที่ไม้กั้น
-                if (!p.divertered) {
-                    const ddx = p.mesh.position.x - diverterX;
-                    const ddz = p.mesh.position.z - diverterZ;
-                    if (Math.sqrt(ddx * ddx + ddz * ddz) < 0.6) {
-                        p.divertered = true;
-                        if (isRejectStatus(p.status)) {
-                            p.isRejected = true;
-                            triggerDiverter();
-                        }
+                // การคัดทิ้งที่ไม้กั้น (Robust Reject Logic)
+                // ต่อให้ส่งดีเลย์หรือกระตุก ถ้ารู้ผล REJECT แล้วและวิ่งมาถึงระยะไม้กั้น จะโดนปัดทิ้งเสมอ
+                if (!p.isRejected && isRejectStatus(p.status)) {
+                    // เช็คว่ากล่องอยู่บนฝั่งขากลับ (Z มีค่าลบ) และวิ่งผ่านเลยระยะ X ของไม้กั้นแล้วหรือยัง (ฝั่งนี้กล่องวิ่งไปทิศ -X)
+                    if (p.mesh.position.z < -2 && p.mesh.position.x <= diverterX + 0.4) {
+                        p.isRejected = true;
+                        triggerDiverter();
                     }
                 }
                 
@@ -1201,6 +1223,9 @@
         if (window.ResizeObserver) new ResizeObserver(onResize).observe(document.getElementById('canvas-wrap'));
         setTimeout(onResize, 100);
 
+        // ==========================================
+        // DataTables & MQTT
+        // ==========================================
         $(document).ready(function () {
             const esc = (v) => $('<div>').text(v == null ? '' : v).html();
             dataTable = $('#dataTable').DataTable({
@@ -1305,9 +1330,9 @@
             const lastReadByTag = new Map(); 
 
             const GATE_NAME_MAP = {
-                'RFID_GATE1': 'Gate-B',
-                'RFID_GATE2': 'Gate-C',
-                'RFID_GATE3': 'Gate-A'
+                'RFID_GATE1': 'Gate-B', // เสาเกิดพัสดุ
+                'RFID_GATE2': 'Gate-C', // เสาเช็คผล/วาร์ปชดเชย
+                'RFID_GATE3': 'Gate-A'  // เสาสุดท้าย (Complete)
             };
 
             function onMessageArrived(message) {
@@ -1317,7 +1342,6 @@
                 try {
                     raw = JSON.parse(message.payloadString);
                 } catch (e) {
-                    console.warn("ข้อความ MQTT ไม่ใช่ JSON ข้ามข้อความนี้:", message.payloadString);
                     return;
                 }
 
@@ -1338,7 +1362,7 @@
                 const now = Date.now();
                 const lastRead = lastReadByTag.get(data.tag_id);
                 if (lastRead && lastRead.gate_name === data.gate_name && (now - lastRead.time) < RFID_DEBOUNCE_MS) {
-                    return; // ข้ามการอ่านซ้ำรัวๆ
+                    return; 
                 }
                 lastReadByTag.set(data.tag_id, { gate_name: data.gate_name, time: now });
 
@@ -1355,8 +1379,10 @@
                         // ระบบ Warp (Sync Position) + Latency Offset
                         if (gateProgressMap[data.gate_name] !== undefined) {
                             let targetProgress = gateProgressMap[data.gate_name];
+                            
+                            // ชดเชยการวาร์ปที่ Gate-C (ดันไปข้างหน้าอีก 15 ซม.) เผื่อเวลาส่งเน็ตเวิร์ค
                             if (data.gate_name === 'Gate-C') {
-                                const LATENCY_OFFSET_CM = 15; // ชดเชยความล่าช้า 15 ซม.
+                                const LATENCY_OFFSET_CM = 15; 
                                 const offsetProgress = (LATENCY_OFFSET_CM * scale) / totalPath;
                                 targetProgress += offsetProgress;
                             }
@@ -1367,7 +1393,7 @@
                             pkg.mesh.rotation.y = t.rotY;
                         }
 
-                        // เปลี่ยนสีทันทีถ้ารู้ผลคัดทิ้ง
+                        // เปลี่ยนสีทันทีเมื่อทราบผล
                         if (isRejectStatus(data.status)) {
                             const rejectMat = pkgMats['REJECT'];
                             if (rejectMat && pkg.mesh) {
@@ -1376,7 +1402,7 @@
                             }
                         }
 
-                        // ลบกล่องอัตโนมัติเมื่อจบกระบวนการที่ Gate-A
+                        // ถ้าผ่าน Gate-A ด้วยสถานะ Complete ให้ลบกล่องออกทันที
                         if (data.gate_name === 'Gate-A' && isCompleteStatus(data.status)) {
                             removePackage(pkg);
                         }
@@ -1442,6 +1468,9 @@
             return pkg;
         }
 
+        // ==========================================
+        // Simulation Controls
+        // ==========================================
         function sendFake() {
             if (!isConveyorRunning && speedStraightUnitsPerSec === 0) {
                 applyPlcSpeedData({ is_running: true, speed_straight_mps: 0.3, speed_curve_mps: 0.3 });
