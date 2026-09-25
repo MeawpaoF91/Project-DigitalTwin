@@ -1117,7 +1117,7 @@
                 // --- ระบบหน่วงความเร็วที่รอยต่อ (Stutter at Joints) ---
                 let current_d = (p.progress % 1.0) * totalPath;
                 let speedMultiplier = 1.0;
-                const SLOW_ZONE = 0.35; // ระยะ (units) บริเวณรอยต่อที่จะเกิดการหน่วงชิ้นงาน
+                const SLOW_ZONE = 0.20; // ลดระยะ (units) บริเวณรอยต่อให้สั้นลง
                 
                 // จุดรอยต่อทั้ง 4 จุดบนความยาวของสายพาน
                 const joints = [0, lenStraight, lenStraight + lenArc, lenStraight * 2 + lenArc, totalPath];
@@ -1129,7 +1129,7 @@
                     if (jd === totalPath && current_d < SLOW_ZONE) dist = current_d;
                     
                     if (dist < SLOW_ZONE) {
-                        speedMultiplier = 0.25; // ลดความเร็วชิ้นงานเหลือ 25% จำลองการติดขัด
+                        speedMultiplier = 0.65; // ปรับความเร็วเพิ่มขึ้นเป็น 65% (ลดความหนืดลง)
                         break;
                     }
                 }
