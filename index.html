@@ -282,8 +282,9 @@
         scene.background = new THREE.Color(0x0a0e1a); 
         scene.fog = new THREE.Fog(0x0a0e1a, 30, 70); 
 
-        const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 200);
-        
+        // Orthographic = isometric/มุมกล้องจริง เส้นขนานจะขนานเสมอ ไม่มีจุดหายลวงตาแบบ Perspective
+        const camera = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 200);
+
         let camMode = 'iso';
         const camPresets = {
             iso:  { pos: [16, 17.8, 12.5], look: [0, 2.8, -3.5] },
@@ -294,28 +295,40 @@
         function frameCamera() {
             const p = camPresets[camMode];
             const look = new THREE.Vector3(...p.look);
-            const dir = new THREE.Vector3(...p.pos).sub(look);
-            let dist = dir.length();
-            dir.normalize();
-            const place = (d) => {
-                camera.position.copy(dir).multiplyScalar(d).add(look);
-                camera.lookAt(look);
-                camera.updateMatrixWorld();
+            const dir = new THREE.Vector3(...p.pos).sub(look).normalize();
+
+            // ระยะกล้องไม่มีผลกับขนาดภาพใน orthographic (แค่ต้องพอสำหรับ near/far) ใช้ค่าคงที่ได้เลย
+            camera.position.copy(dir).multiplyScalar(40).add(look);
+            camera.lookAt(look);
+            camera.updateMatrixWorld();
+
+            const wrap = document.getElementById('canvas-wrap');
+            const aspect = (wrap && wrap.clientHeight) ? (wrap.clientWidth / wrap.clientHeight) : 1;
+
+            const applyFrustum = (viewSize) => {
+                camera.left = -viewSize * aspect / 2;
+                camera.right = viewSize * aspect / 2;
+                camera.top = viewSize / 2;
+                camera.bottom = -viewSize / 2;
+                camera.updateProjectionMatrix();
             };
+
             if (fitPoints.length) {
                 const v = new THREE.Vector3();
-                const fits = (d) => {
-                    place(d);
+                const fits = (viewSize) => {
+                    applyFrustum(viewSize);
                     return fitPoints.every(pt => {
                         v.copy(pt).project(camera);
                         return Math.abs(v.x) <= 0.9 && Math.abs(v.y) <= 0.9;
                     });
                 };
-                let lo = 6, hi = 120;
+                // หา viewSize (ขนาดพื้นที่มองเห็น) เล็กที่สุดที่ยังพอดีกับฉากทั้งหมด (ซูมเข้าให้มากที่สุดเท่าที่จะพอดี)
+                let lo = 4, hi = 120;
                 for (let i = 0; i < 26; i++) { const mid = (lo + hi) / 2; if (fits(mid)) hi = mid; else lo = mid; }
-                dist = hi;
+                applyFrustum(hi);
+            } else {
+                applyFrustum(20);
             }
-            place(dist);
         }
 
         function setCam(mode) {
@@ -411,7 +424,7 @@
         // ==========================================
         const scale = 0.05; 
         const SCENE_UNITS_PER_METER = 100 * scale;
-        const tLen = 370 * scale; 
+        const tLen = 375 * scale; 
         const tWid = 163 * scale; 
         const bWid = 23 * scale;  
 
@@ -846,6 +859,16 @@
         const packages = []; 
         const pkgColors = { REJECT: 0xE24B4A, PASS: 0x378ADD, default: 0x7F77DD };
 
+        // เช็คสถานะจากของจริงแบบไม่สนตัวพิมพ์เล็ก-ใหญ่
+        // ของจริง: Gate-B = "Start", Gate-C = "In progress" หรือ "Reject", Gate-A = "Complete"
+        function isRejectStatus(status) {
+            return String(status || '').trim().toUpperCase() === 'REJECT';
+        }
+        function isCompleteStatus(status) {
+            const s = String(status || '').trim().toUpperCase();
+            return s === 'COMPLETE' || s === 'COMPLETED';
+        }
+
         function makeBoxGeo(w, h, d) {
             const r = 0.07, b = 0.035;
             const hw = w / 2 - b, hd = d / 2 - b;
@@ -890,10 +913,15 @@
 
         let stats = { total: 0, passCount: 0, rejectCount: 0, tags: new Set() };
         function updateStats(data) {
-            if (data.gate_name === 'Gate-A') {
+            // เสาหนึ่ง (Gate-A) ส่ง "Complete" เมื่อวนครบรอบ = นับเป็น PASS
+            if (data.gate_name === 'Gate-A' && isCompleteStatus(data.status)) {
                 stats.total++;
-                if (data.status === 'PASS') stats.passCount++;
-                if (data.status === 'REJECT') stats.rejectCount++;
+                stats.passCount++;
+            }
+            // เสาสาม (Gate-C) ส่ง "Reject" เมื่อคัดออก = นับเป็น REJECT
+            if (data.gate_name === 'Gate-C' && isRejectStatus(data.status)) {
+                stats.total++;
+                stats.rejectCount++;
             }
             if (data.tag_id) stats.tags.add(String(data.tag_id));
             
@@ -993,13 +1021,13 @@
         // ใช้ร่วมกันทั้งจาก physics-detection (กล่องวิ่งผ่านตำแหน่งเกตจริงในฉาก 3D)
         // และจากข้อความ MQTT จริงที่เพิ่งได้รับ เพื่อไม่ให้มี 2 จุดเขียน log แยกกัน
         function logGateEvent(evt) {
-            flashGate(evt.gate_name, evt.status);
-            updateStats(evt);
+            flashGate(evt.gate_name, evt.status);   // ใช้ชื่อภายใน (Gate-A/B/C) หาไฟที่ถูกเกต
+            updateStats(evt);                        // ใช้ชื่อภายในตัดสิน PASS/REJECT
             if (dataTable) {
                 let displayTime = new Date(evt.event_time).toLocaleString('th-TH');
                 dataTable.row.add([
                     evt.tag_id,
-                    evt.gate_name,
+                    evt.gate_name_raw || evt.gate_name, // โชว์ชื่อจริงตามที่อุปกรณ์ส่งมา
                     evt.status,
                     displayTime
                 ]).draw(false);
@@ -1098,7 +1126,7 @@
                     const ddz = p.mesh.position.z - diverterZ;
                     if (Math.sqrt(ddx * ddx + ddz * ddz) < 0.6) {
                         p.divertered = true;
-                        if (p.status === 'REJECT') {
+                        if (isRejectStatus(p.status)) {
                             p.isRejected = true;
                             triggerDiverter();
                         }
@@ -1155,9 +1183,7 @@
             if(!wrap) return;
             const w = wrap.clientWidth;
             const h = wrap.clientHeight;
-            camera.aspect = w / h;
-            camera.updateProjectionMatrix();
-            frameCamera();
+            frameCamera(); // คำนวณ aspect + กรอบมองเห็นใหม่ให้เอง (orthographic)
             renderer.setSize(w, h, false);
         }
         window.addEventListener('resize', onResize);
@@ -1179,7 +1205,7 @@
                     { targets: [0, 3], className: 'mono' },
                     { targets: 2, render: function (data, type) {
                         if (type !== 'display') return data;
-                        const cls = data === 'REJECT' ? 'chip-reject' : data === 'PASS' ? 'chip-pass' : 'chip-other';
+                        const cls = isRejectStatus(data) ? 'chip-reject' : isCompleteStatus(data) ? 'chip-pass' : 'chip-other';
                         return '<span class="chip ' + cls + '">' + esc(data) + '</span>';
                     } }
                 ],
@@ -1276,9 +1302,9 @@
             // ---------- แม็ปชื่อเกตจากเครื่องอ่าน RFID จริง -> ชื่อเกตภายในของโมเดล 3D ----------
             // ปรับ key ฝั่งซ้ายให้ตรงกับ gate_name ที่เครื่องอ่านแต่ละตัวส่งมาจริง ถ้าไม่ตรงตามนี้
             const GATE_NAME_MAP = {
-                'RFID_GATE1': 'Gate-A', // เสาหนึ่ง
-                'RFID_GATE2': 'Gate-B', // เสาสอง (จุดเกิดพัสดุ)
-                'RFID_GATE3': 'Gate-C'  // เสาสาม
+                'RFID_GATE1': 'Gate-B', // เสาสอง (จุดเกิดพัสดุ)
+                'RFID_GATE2': 'Gate-C', // เสาสาม
+                'RFID_GATE3': 'Gate-A'  // เสาหนึ่ง
             };
 
             function onMessageArrived(message) {
@@ -1306,7 +1332,9 @@
                     return;
                 }
 
-                // แปลงชื่อเกตจากฮาร์ดแวร์จริง (เช่น RFID_GATE1) ให้เป็นชื่อภายใน (Gate-A/B/C)
+                // เก็บชื่อเกตดิบที่อุปกรณ์จริงส่งมา (เช่น RFID_GATE1) ไว้โชว์ในตาราง
+                data.gate_name_raw = data.gate_name;
+                // แปลงเป็นชื่อภายใน (Gate-A/B/C) ไว้ใช้ตัดสินใจ spawn/คัดออก/สถิติเท่านั้น
                 data.gate_name = GATE_NAME_MAP[data.gate_name] || data.gate_name;
 
                 // กันแท็กเดิม+ประตูเดิมที่ถูกอ่านซ้ำรัวๆ ภายในช่วง debounce
@@ -1329,9 +1357,9 @@
                         pkg.status = data.status; // อัปเดตผลตัดสินล่าสุด (เผื่อเพิ่งรู้ผล PASS/REJECT ที่เกตนี้)
                         pkg.detectedGates.add(data.gate_name); // กัน physics-detection ลง log ซ้ำตอนกล่องวิ่งผ่านจริง
 
-                        // รู้ผล REJECT จากของจริงเมื่อไร ให้กล่องเปลี่ยนเป็นสีแดงทันที
+                        // รู้ผล Reject จากของจริงเมื่อไร (ปกติคือเสาสาม/Gate-C) ให้กล่องเปลี่ยนเป็นสีแดงทันที
                         // (ไม่ต้องรอถึงไม้กั้นค่อยเปลี่ยน สีต้องตามผลตัดสินจริง)
-                        if (data.status === 'REJECT') {
+                        if (isRejectStatus(data.status)) {
                             const rejectMat = pkgMats['REJECT'];
                             if (rejectMat) pkg.mesh.material.color.copy(rejectMat.color);
                             if (rejectMat) pkg.mesh.material.emissive.copy(rejectMat.emissive);
@@ -1346,9 +1374,8 @@
         });
 
         function spawnPackageFromMQTT(data) {
-            // เก็บสถานะดิบ ('REJECT'/'PASS'/...) ไว้ใช้ตัดสินใจที่ไม้กั้น ส่วน matKey ใช้แค่เลือกสีกล่อง
-            const isRejectStatus = (data.status === 'REJECT');
-            const matKey = isRejectStatus ? 'REJECT' : 'PASS';
+            // เก็บสถานะดิบ ('Start'/'In progress'/'Reject'/'Complete') ไว้ใช้ตัดสินใจที่ไม้กั้น ส่วน matKey ใช้แค่เลือกสีกล่อง
+            const matKey = isRejectStatus(data.status) ? 'REJECT' : 'PASS';
             const mat = pkgMats[matKey] || pkgMats['default'];
 
             const w = 0.5 + Math.random() * 0.3;
