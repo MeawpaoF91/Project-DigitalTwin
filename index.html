@@ -224,8 +224,7 @@
                     <dl class="pairs">
                         <div><dt>อัตราผ่าน</dt><dd id="s-rate">-</dd></div>
                         <div><dt>แท็กที่สแกนแล้ว</dt><dd id="s-tags">0</dd></div>
-                        <!-- เปลี่ยนค่าเริ่มต้นที่แสดงผลในตารางเป็น 0.3 m/s -->
-                        <div><dt>ความเร็วสายพาน (PLC)</dt><dd id="s-speed">0.300 m/s</dd></div>
+                        <div><dt>ความเร็วสายพาน (PLC)</dt><dd id="s-speed">0 m/s (หยุด)</dd></div>
                     </dl>
                 </section>
                 <section>
@@ -921,11 +920,9 @@
             pkgMats[k] = new THREE.MeshStandardMaterial({ color: C(v), emissive: C(v), emissiveIntensity: 0.08, roughness: 0.5, metalness: 0.05 });
         });
 
-        // ------------------------------------------
-        // ตั้งค่าความเร็วเริ่มต้นที่ 0.3 m/s
-        // ------------------------------------------
-        let speedStraightUnitsPerSec = 0.3 * SCENE_UNITS_PER_METER;
-        let speedCurveUnitsPerSec = 0.3 * SCENE_UNITS_PER_METER;
+        // ---------- ระบบความเร็ว 2 โซน (เริ่มต้น 0 m/s รอสัญญาณจาก PLC) ----------
+        let speedStraightUnitsPerSec = 0;
+        let speedCurveUnitsPerSec = 0;
 
         function applyPlcSpeedData(d) {
             const isRunning = (d.is_running === true || d.is_running === 1 || d.is_running === 'true' || d.is_running === '1');
