@@ -12,9 +12,7 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap" rel="stylesheet">
     
     <style>
-        /* */
-        /* ---------- Tokens ----------
-           สีหลักผูกกับฉาก 3D: น้ำเงิน = PASS (เท่ากับสีกล่อง/ไฟ Gate), แดง = REJECT */
+        /* ---------- Tokens ---------- */
         :root {
             --ink: #0a0e1a;
             --deck: #0f1526;
@@ -61,7 +59,6 @@
         #canvas-wrap { position: relative; height: clamp(460px, 66vh, 680px); border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; background: var(--ink); }
         canvas { display: block; width: 100% !important; height: 100% !important; outline: none; }
 
-        /* */
         #hud { position: absolute; top: 14px; left: 14px; pointer-events: none; }
         .hud-badge, .view-switch, .legend { background: rgba(10, 14, 26, .72); border: 1px solid var(--rule-2); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
         .hud-badge { display: inline-flex; align-items: center; gap: 8px; padding: 5px 13px 5px 11px; border-radius: 999px; font-size: 12px; font-weight: 500; color: var(--text); }
@@ -106,7 +103,6 @@
         .pairs dt { font-size: 13px; font-weight: 400; color: var(--text-2); }
         .pairs dd { margin: 0; font-size: 15px; font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
 
-        /* */
         .sim-title { font-size: 13px; color: var(--text-2); margin-bottom: 10px; }
         .sim-row { display: flex; flex-wrap: wrap; gap: 8px; }
         .sim-btn { flex: 1 1 0; border: 1px solid var(--rule-2); background: transparent; color: var(--text); font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 8px; cursor: pointer; transition: background .15s, border-color .15s; }
@@ -161,6 +157,7 @@
     </style>
 </head>
 <body data-bs-theme="dark">
+
     <header class="topbar">
         <div class="shell topbar-in">
             <div class="brand">
@@ -267,6 +264,14 @@
 
     <script>
         // ==========================================
+        // การจัดการตัวแปร Global ที่สำคัญ (ป้องกัน TDZ Error)
+        // ==========================================
+        let dataTable = null;
+        const activeTagPackages = new Map(); 
+        const packages = []; 
+        const pkgColors = { REJECT: 0xE24B4A, PASS: 0x378ADD, default: 0x7F77DD };
+
+        // ==========================================
         // ส่วนที่ 1: ตั้งค่า THREE.JS
         // ==========================================
         const canvas = document.getElementById('c');
@@ -324,7 +329,6 @@
                         return Math.abs(v.x) <= 0.9 && Math.abs(v.y) <= 0.9;
                     });
                 };
-                // หา viewSize (ขนาดพื้นที่มองเห็น) เล็กที่สุดที่ยังพอดีกับฉากทั้งหมด (ซูมเข้าให้มากที่สุดเท่าที่จะพอดี)
                 let lo = 4, hi = 120;
                 for (let i = 0; i < 26; i++) { const mid = (lo + hi) / 2; if (fits(mid)) hi = mid; else lo = mid; }
                 applyFrustum(hi);
@@ -422,7 +426,7 @@
         scene.add(conveyorGroup);
 
         // ==========================================
-        // ส่วนที่ 2: การคำนวณสายพาน (แยกชิ้น)
+        // ส่วนที่ 2: การคำนวณสายพาน (แบบแยกชิ้น 4 ส่วน)
         // ==========================================
         const scale = 0.05; 
         const SCENE_UNITS_PER_METER = 100 * scale;
@@ -434,10 +438,10 @@
         const rIn = rOut - bWid; 
         const halfS = (tLen - tWid) / 2; 
 
-        // Function สำหรับสร้าง Shape ที่แยกกัน 4 ชิ้น
+        // Function สำหรับสร้าง Shape ที่แยกกัน 4 ชิ้น (ตรง 2 ชิ้น, โค้ง 2 ชิ้น)
         function createSeparateShapes(outer, inner) {
-            const gapL = 0.15; 
-            const gapA = 0.025; 
+            const gapL = 0.15; // ระยะห่างเว้นร่องชิ้นทางตรง
+            const gapA = 0.025; // มุมเว้นร่องชิ้นทางโค้ง
             
             const straightTop = new THREE.Shape();
             straightTop.moveTo(halfS - gapL, outer);
@@ -528,7 +532,7 @@
             conveyorGroup.add(glow);
         });
 
-        // Transition Rollers
+        // ---------- ลูกกลิ้งข้อต่อ (Transition Rollers) ----------
         const rollerGeo = new THREE.CylinderGeometry(0.12, 0.12, bWid - 0.05, 16);
         const rollerMat = new THREE.MeshStandardMaterial({ color: C(0x2d3445), metalness: 0.6, roughness: 0.4 });
         const addRoller = (x, z) => {
@@ -886,11 +890,8 @@
         }
 
         // ==========================================
-        // ส่วนที่ 5: การจัดการพัสดุ และอนิเมชั่น
+        // ส่วนที่ 5: การจัดการพัสดุ
         // ==========================================
-        const packages = []; 
-        const pkgColors = { REJECT: 0xE24B4A, PASS: 0x378ADD, default: 0x7F77DD };
-
         function isRejectStatus(status) {
             return String(status || '').trim().toUpperCase() === 'REJECT';
         }
@@ -1113,7 +1114,28 @@
                     return; 
                 }
                 
-                let travel = getSpeedAtProgress(p.progress) * dt; 
+                // --- ระบบหน่วงความเร็วที่รอยต่อ (Stutter at Joints) ---
+                let current_d = (p.progress % 1.0) * totalPath;
+                let speedMultiplier = 1.0;
+                const SLOW_ZONE = 0.35; // ระยะ (units) บริเวณรอยต่อที่จะเกิดการหน่วงชิ้นงาน
+                
+                // จุดรอยต่อทั้ง 4 จุดบนความยาวของสายพาน
+                const joints = [0, lenStraight, lenStraight + lenArc, lenStraight * 2 + lenArc, totalPath];
+                
+                for (let jd of joints) {
+                    let dist = Math.abs(current_d - jd);
+                    // จัดการระยะตรงจุดเชื่อมรอบวง (ระหว่างจุดเริ่มต้นและจุดสิ้นสุด)
+                    if (jd === 0 && current_d > totalPath - SLOW_ZONE) dist = totalPath - current_d;
+                    if (jd === totalPath && current_d < SLOW_ZONE) dist = current_d;
+                    
+                    if (dist < SLOW_ZONE) {
+                        speedMultiplier = 0.25; // ลดความเร็วชิ้นงานเหลือ 25% จำลองการติดขัด
+                        break;
+                    }
+                }
+                
+                // คำนวณระยะทางที่ชิ้นงานเคลื่อนที่ไปในเฟรมนี้ (ความเร็วสายพาน * เวลา * ตัวคูณการหน่วง)
+                let travel = getSpeedAtProgress(p.progress) * dt * speedMultiplier; 
                 
                 p.progress += travel / totalPath; 
                 p.distanceTraveled += travel;
@@ -1135,6 +1157,14 @@
                     else if (distance > 2.5 && p.detectedGates.has(gateName)) {
                         p.detectedGates.delete(gateName);
                     }
+                }
+
+                // If package status is 'Complete' and it has reached Gate-A, remove it immediately
+                if (p.detectedGates.has('Gate-A') && isCompleteStatus(p.status)) {
+                    scene.remove(p.mesh);
+                    p.done = true;
+                    activeTagPackages.delete(p.tag_id);
+                    return;
                 }
 
                 if (!p.divertered) {
@@ -1207,9 +1237,6 @@
         // ==========================================
         // ส่วนที่ 6: การทำงานของ DATATABLES และ MQTT
         // ==========================================
-        let dataTable;
-        const activeTagPackages = new Map(); 
-
         $(document).ready(function () {
             const esc = (v) => $('<div>').text(v == null ? '' : v).html();
             dataTable = $('#dataTable').DataTable({
@@ -1316,6 +1343,12 @@
                 'RFID_GATE3': 'Gate-A'  
             };
 
+            const gateProgressMap = {
+                'Gate-A': 1.0 + ((GATE1_OFFSET_CM * scale) / totalPath),
+                'Gate-B': ((GATE1_OFFSET_CM + GATE_GAP_CM) * scale) / totalPath,
+                'Gate-C': (lenStraight + lenArc + (GATE3_OFFSET_CM * scale)) / totalPath
+            };
+
             function onMessageArrived(message) {
                 console.log("MQTT Received:", message.payloadString);
 
@@ -1361,10 +1394,28 @@
                         pkg.status = data.status; 
                         pkg.detectedGates.add(data.gate_name); 
 
+                        // WARP: Snap 3D model to exact physical gate position to sync with hardware
+                        if (gateProgressMap[data.gate_name] !== undefined) {
+                            pkg.progress = gateProgressMap[data.gate_name];
+                            pkg.distanceTraveled = pkg.progress * totalPath;
+                            
+                            // Update 3D mesh position immediately
+                            let t = getPathTransform(pkg.progress);
+                            pkg.mesh.position.set(t.pos.x, pkg.mesh.userData.baseY, t.pos.z);
+                            pkg.mesh.rotation.y = t.rotY;
+                        }
+
                         if (isRejectStatus(data.status)) {
                             const rejectMat = pkgMats['REJECT'];
                             if (rejectMat) pkg.mesh.material.color.copy(rejectMat.color);
                             if (rejectMat) pkg.mesh.material.emissive.copy(rejectMat.emissive);
+                        }
+
+                        // Disappear if completed at Gate-A
+                        if (data.gate_name === 'Gate-A' && isCompleteStatus(data.status)) {
+                            scene.remove(pkg.mesh);
+                            pkg.done = true;
+                            activeTagPackages.delete(data.tag_id);
                         }
                     } else {
                         console.warn(`ไม่พบกล่องของแท็ก ${data.tag_id} บนสายพาน (อาจพลาดข้อความจาก Gate-B) — บันทึกผลไว้แต่ไม่มีกล่องแสดง`);
