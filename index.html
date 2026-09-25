@@ -12,7 +12,6 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap" rel="stylesheet">
     
     <style>
-        /* ---------- Tokens ---------- */
         :root {
             --ink: #0a0e1a;
             --deck: #0f1526;
@@ -265,7 +264,7 @@
 
     <script>
         // ==========================================
-        // Global Variables สำหรับการใช้งานในหลายๆ ฟังก์ชัน
+        // Global Variables
         // ==========================================
         let dataTable = null;
         const activeTagPackages = new Map(); 
@@ -277,7 +276,7 @@
         let isConveyorRunning = false;
 
         function removePackage(p) {
-            if (p.mesh) scene.remove(p.mesh);
+            if (p.mesh && scene) scene.remove(p.mesh);
             p.done = true;
             activeTagPackages.delete(p.tag_id);
         }
@@ -422,7 +421,7 @@
         scene.add(conveyorGroup);
 
         // ==========================================
-        // สายพาน (แยกชิ้น ตรง 2 โค้ง 2)
+        // สร้างชิ้นส่วนสายพาน (แยกชิ้น ตรง 2 โค้ง 2)
         // ==========================================
         const scale = 0.05; 
         const SCENE_UNITS_PER_METER = 100 * scale;
@@ -582,7 +581,11 @@
             return { pos, rotY };
         }
 
-        const stripeCount = Math.floor(totalPath / 1.5);
+        // --- ระบบสร้างเส้นสายพานแบบแบ่งโซน (4 Segments) ช่วยป้องกันเส้นเพี้ยน ---
+        const activeStripes = []; 
+        const segLimits = [lenStraight, lenArc, lenStraight, lenArc];
+        const stripeSpacing = 1.0; // ปรับระยะห่างระหว่างเส้น (units)
+        
         const stripeMat = new THREE.MeshStandardMaterial({ color: C(0x37567f), metalness: 0.15, roughness: 0.6, emissive: C(0x0a1626), emissiveIntensity: 0.6 });
         const STRIPE_SEGMENTS = 5;
         const segFullWidth = bWid - 0.1;
@@ -590,20 +593,27 @@
         const segW = segFullWidth / STRIPE_SEGMENTS - segGap;
         const segGeo = new THREE.BoxGeometry(0.08, 0.13, segW);
 
-        for (let i = 0; i < stripeCount; i++) {
-            const group = new THREE.Group();
-            for (let s = 0; s < STRIPE_SEGMENTS; s++) {
-                const seg = new THREE.Mesh(segGeo, stripeMat);
-                const zLocal = -segFullWidth / 2 + segW / 2 + s * (segFullWidth / STRIPE_SEGMENTS);
-                seg.position.set(0, 0, zLocal);
-                group.add(seg);
+        // วนลูปสร้างเส้นทีละท่อน (0=ตรงแรก, 1=โค้งขวา, 2=ตรงกลับ, 3=โค้งซ้าย)
+        for (let seg = 0; seg < 4; seg++) {
+            let count = Math.floor(segLimits[seg] / stripeSpacing);
+            let actualSpacing = segLimits[seg] / count; // เฉลี่ยระยะห่างให้เป๊ะพอดีความยาวท่อน
+            
+            for (let i = 0; i < count; i++) {
+                const group = new THREE.Group();
+                for (let s = 0; s < STRIPE_SEGMENTS; s++) {
+                    const segMesh = new THREE.Mesh(segGeo, stripeMat);
+                    const zLocal = -segFullWidth / 2 + segW / 2 + s * (segFullWidth / STRIPE_SEGMENTS);
+                    segMesh.position.set(0, 0, zLocal);
+                    group.add(segMesh);
+                }
+                
+                conveyorGroup.add(group);
+                activeStripes.push({
+                    mesh: group,
+                    segment: seg,
+                    d: i * actualSpacing
+                });
             }
-            let progress = i / stripeCount;
-            group.userData = { isStripe: true, progress: progress };
-            let t = getPathTransform(progress);
-            group.position.set(t.pos.x, 1.08 + LIFT, t.pos.z);
-            group.rotation.y = t.rotY;
-            conveyorGroup.add(group);
         }
 
         const steelMat = new THREE.MeshStandardMaterial({ color: C(0x3f5070), metalness: 0.8, roughness: 0.4 });
@@ -1190,16 +1200,44 @@
                 diverterPivot.rotation.y = DIVERTER_IDLE_ANGLE + (DIVERTER_ACTIVE_ANGLE - DIVERTER_IDLE_ANGLE) * k;
             }
 
-            conveyorGroup.children.forEach(c => {
-                if (c.userData.isStripe) {
-                    let travel = getSpeedAtProgress(c.userData.progress) * dt;
-                    c.userData.progress += travel / totalPath; 
-                    if (c.userData.progress >= 1.0) c.userData.progress -= 1.0; 
-                    
-                    let t = getPathTransform(c.userData.progress);
-                    c.position.set(t.pos.x, 1.08 + LIFT, t.pos.z);
-                    c.rotation.y = t.rotY; 
+            // อัปเดตลายสายพาน (เมื่อสุดทางของแต่ละ Segment จะลบและเกิดใหม่ที่ต้นทางทันที)
+            activeStripes.forEach(stripe => {
+                let limit = segLimits[stripe.segment];
+                let speed = (stripe.segment % 2 === 0) ? speedStraightUnitsPerSec : speedCurveUnitsPerSec;
+                
+                stripe.d += speed * dt;
+                
+                // ถ้าระยะวิ่งเกินความยาวสายพานท่อนนั้น ให้รันกลับไปเกิดใหม่ (Respawn) ที่ระยะ 0
+                if (stripe.d >= limit) {
+                    stripe.d %= limit;
                 }
+                
+                let d = stripe.d;
+                let pos = new THREE.Vector3();
+                let rotY = 0;
+                
+                if (stripe.segment === 0) {
+                    pos.x = -halfS + d;
+                    pos.z = 0;
+                    rotY = 0;
+                } else if (stripe.segment === 1) {
+                    let theta = (d / lenArc) * Math.PI;
+                    pos.x = halfS + Math.sin(theta) * rCenter;
+                    pos.z = zOffset + Math.cos(theta) * rCenter;
+                    rotY = theta;
+                } else if (stripe.segment === 2) {
+                    pos.x = halfS - d;
+                    pos.z = zOffset * 2;
+                    rotY = Math.PI;
+                } else if (stripe.segment === 3) {
+                    let theta = Math.PI + (d / lenArc) * Math.PI;
+                    pos.x = -halfS + Math.sin(theta) * rCenter;
+                    pos.z = zOffset + Math.cos(theta) * rCenter;
+                    rotY = theta;
+                }
+                
+                stripe.mesh.position.set(pos.x, 1.08 + LIFT, pos.z);
+                stripe.mesh.rotation.y = rotY;
             });
 
             const fade = Math.min(1, dt * 4);
