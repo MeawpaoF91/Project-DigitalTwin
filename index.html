@@ -1118,7 +1118,7 @@
                 
                 let current_d = (p.progress % 1.0) * totalPath;
                 let speedMultiplier = 1.0;
-                const SLOW_ZONE = 0.25; 
+                const SLOW_ZONE = 0.20; 
                 
                 const joints = [0, lenStraight, lenStraight + lenArc, lenStraight * 2 + lenArc, totalPath];
                 
@@ -1335,9 +1335,9 @@
             const lastReadByTag = new Map(); 
 
             const GATE_NAME_MAP = {
-                'RFID_GATE1': 'Gate-B', 
-                'RFID_GATE2': 'Gate-C', 
-                'RFID_GATE3': 'Gate-A'  
+                'RFID_GATE1': 'Gate-B', // เสาสอง (จุดเกิดพัสดุ)
+                'RFID_GATE2': 'Gate-C', // เสาสาม
+                'RFID_GATE3': 'Gate-A'  // เสาหนึ่ง
             };
 
             const gateProgressMap = {
@@ -1383,16 +1383,30 @@
                 lastReadByTag.set(data.tag_id, { gate_name: data.gate_name, time: now });
 
                 if (data.gate_name === 'Gate-B') {
+                    // เสาสอง = จุดเกิดพัสดุ -> สร้างกล่อง 3D ใหม่เสมอ
                     const pkg = spawnPackageFromMQTT(data);
                     activeTagPackages.set(data.tag_id, pkg);
                 } else {
+                    // เสาอื่น (Gate-A / Gate-C) -> ใช้กล่องเดิมที่วิ่งอยู่แล้ว ไม่ spawn ซ้ำ
                     const pkg = activeTagPackages.get(data.tag_id);
                     if (pkg) {
-                        pkg.status = data.status; 
-                        pkg.detectedGates.add(data.gate_name); 
+                        pkg.status = data.status; // อัปเดตผลตัดสินล่าสุด (เผื่อเพิ่งรู้ผล PASS/REJECT ที่เกตนี้)
+                        pkg.detectedGates.add(data.gate_name); // กัน physics-detection ลง log ซ้ำตอนกล่องวิ่งผ่านจริง
 
+                        // วาร์ปตำแหน่งให้ตรงกับของจริง + ชดเชยความหน่วง
                         if (gateProgressMap[data.gate_name] !== undefined) {
-                            pkg.progress = gateProgressMap[data.gate_name];
+                            let targetProgress = gateProgressMap[data.gate_name];
+                            
+                            // ชดเชยความล่าช้าเครือข่ายสำหรับ Gate-C (ของจริงวิ่งเลยไปแล้ว)
+                            // สมมติว่าของจริงวิ่งที่ 0.3m/s และ MQTT ดีเลย์ประมาณ 0.3 - 0.5 วินาที
+                            // ชิ้นงานจะวิ่งไปแล้วประมาณ 10-15 เซนติเมตร (0.1 - 0.15 เมตร)
+                            if (data.gate_name === 'Gate-C') {
+                                const LATENCY_OFFSET_CM = 15; // ปรับตัวเลขนี้ขึ้นหรือลงได้ตามความเหมาะสม (หน่วย: เซนติเมตร)
+                                const offsetProgress = (LATENCY_OFFSET_CM * scale) / totalPath;
+                                targetProgress += offsetProgress;
+                            }
+
+                            pkg.progress = targetProgress;
                             pkg.distanceTraveled = pkg.progress * totalPath;
                             
                             let t = getPathTransform(pkg.progress);
@@ -1400,21 +1414,7 @@
                             pkg.mesh.rotation.y = t.rotY;
                         }
 
-                        if (isRejectStatus(data.status)) {
-                            const rejectMat = pkgMats['REJECT'];
-                            if (rejectMat) pkg.mesh.material.color.copy(rejectMat.color);
-                            if (rejectMat) pkg.mesh.material.emissive.copy(rejectMat.emissive);
-                        }
-
-                        if (data.gate_name === 'Gate-A' && isCompleteStatus(data.status)) {
-                            scene.remove(pkg.mesh);
-                            pkg.done = true;
-                            activeTagPackages.delete(data.tag_id);
-                        }
-                    } else {
-                        console.warn(`ไม่พบกล่องของแท็ก ${data.tag_id} บนสายพาน (อาจพลาดข้อความจาก Gate-B) — บันทึกผลไว้แต่ไม่มีกล่องแสดง`);
-                    }
-                }
+                        // รู้ผล Reject จากของจริงเมื่อไร (ปกติคือเสาสาม/Gate-C) ให้กล่องเปลี่ยนเป็นสีแดงทันที
 
                 logGateEvent(data);
             }
