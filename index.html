@@ -12,7 +12,8 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap" rel="stylesheet">
     
     <style>
-        /* ---------- Tokens ---------- */
+        /* ---------- Tokens ----------
+           สีหลักผูกกับฉาก 3D: น้ำเงิน = PASS (เท่ากับสีกล่อง/ไฟ Gate), แดง = REJECT */
         :root {
             --ink: #0a0e1a;
             --deck: #0f1526;
@@ -223,7 +224,8 @@
                     <dl class="pairs">
                         <div><dt>อัตราผ่าน</dt><dd id="s-rate">-</dd></div>
                         <div><dt>แท็กที่สแกนแล้ว</dt><dd id="s-tags">0</dd></div>
-                        <div><dt>ความเร็วสายพาน (PLC)</dt><dd id="s-speed">- m/s</dd></div>
+                        <!-- เปลี่ยนค่าเริ่มต้นที่แสดงผลในตารางเป็น 0.3 m/s -->
+                        <div><dt>ความเร็วสายพาน (PLC)</dt><dd id="s-speed">0.300 m/s</dd></div>
                     </dl>
                 </section>
                 <section>
@@ -919,8 +921,11 @@
             pkgMats[k] = new THREE.MeshStandardMaterial({ color: C(v), emissive: C(v), emissiveIntensity: 0.08, roughness: 0.5, metalness: 0.05 });
         });
 
-        let speedStraightUnitsPerSec = 0;
-        let speedCurveUnitsPerSec = 0;
+        // ------------------------------------------
+        // ตั้งค่าความเร็วเริ่มต้นที่ 0.3 m/s
+        // ------------------------------------------
+        let speedStraightUnitsPerSec = 0.3 * SCENE_UNITS_PER_METER;
+        let speedCurveUnitsPerSec = 0.3 * SCENE_UNITS_PER_METER;
 
         function applyPlcSpeedData(d) {
             const isRunning = (d.is_running === true || d.is_running === 1 || d.is_running === 'true' || d.is_running === '1');
@@ -1114,27 +1119,23 @@
                     return; 
                 }
                 
-                // --- ระบบหน่วงความเร็วที่รอยต่อ (Stutter at Joints) ---
                 let current_d = (p.progress % 1.0) * totalPath;
                 let speedMultiplier = 1.0;
-                const SLOW_ZONE = 0.20; // ลดระยะ (units) บริเวณรอยต่อให้สั้นลง
+                const SLOW_ZONE = 0.20; 
                 
-                // จุดรอยต่อทั้ง 4 จุดบนความยาวของสายพาน
                 const joints = [0, lenStraight, lenStraight + lenArc, lenStraight * 2 + lenArc, totalPath];
                 
                 for (let jd of joints) {
                     let dist = Math.abs(current_d - jd);
-                    // จัดการระยะตรงจุดเชื่อมรอบวง (ระหว่างจุดเริ่มต้นและจุดสิ้นสุด)
                     if (jd === 0 && current_d > totalPath - SLOW_ZONE) dist = totalPath - current_d;
                     if (jd === totalPath && current_d < SLOW_ZONE) dist = current_d;
                     
                     if (dist < SLOW_ZONE) {
-                        speedMultiplier = 0.65; // ปรับความเร็วเพิ่มขึ้นเป็น 65% (ลดความหนืดลง)
+                        speedMultiplier = 0.65; 
                         break;
                     }
                 }
                 
-                // คำนวณระยะทางที่ชิ้นงานเคลื่อนที่ไปในเฟรมนี้ (ความเร็วสายพาน * เวลา * ตัวคูณการหน่วง)
                 let travel = getSpeedAtProgress(p.progress) * dt * speedMultiplier; 
                 
                 p.progress += travel / totalPath; 
@@ -1159,7 +1160,6 @@
                     }
                 }
 
-                // If package status is 'Complete' and it has reached Gate-A, remove it immediately
                 if (p.detectedGates.has('Gate-A') && isCompleteStatus(p.status)) {
                     scene.remove(p.mesh);
                     p.done = true;
@@ -1394,12 +1394,10 @@
                         pkg.status = data.status; 
                         pkg.detectedGates.add(data.gate_name); 
 
-                        // WARP: Snap 3D model to exact physical gate position to sync with hardware
                         if (gateProgressMap[data.gate_name] !== undefined) {
                             pkg.progress = gateProgressMap[data.gate_name];
                             pkg.distanceTraveled = pkg.progress * totalPath;
                             
-                            // Update 3D mesh position immediately
                             let t = getPathTransform(pkg.progress);
                             pkg.mesh.position.set(t.pos.x, pkg.mesh.userData.baseY, t.pos.z);
                             pkg.mesh.rotation.y = t.rotY;
@@ -1411,7 +1409,6 @@
                             if (rejectMat) pkg.mesh.material.emissive.copy(rejectMat.emissive);
                         }
 
-                        // Disappear if completed at Gate-A
                         if (data.gate_name === 'Gate-A' && isCompleteStatus(data.status)) {
                             scene.remove(pkg.mesh);
                             pkg.done = true;
