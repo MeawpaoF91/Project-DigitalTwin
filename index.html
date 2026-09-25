@@ -12,6 +12,7 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Thai:wght@400;500;600&display=swap" rel="stylesheet">
     
     <style>
+        /* */
         /* ---------- Tokens ----------
            สีหลักผูกกับฉาก 3D: น้ำเงิน = PASS (เท่ากับสีกล่อง/ไฟ Gate), แดง = REJECT */
         :root {
@@ -60,6 +61,7 @@
         #canvas-wrap { position: relative; height: clamp(460px, 66vh, 680px); border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; background: var(--ink); }
         canvas { display: block; width: 100% !important; height: 100% !important; outline: none; }
 
+        /* */
         #hud { position: absolute; top: 14px; left: 14px; pointer-events: none; }
         .hud-badge, .view-switch, .legend { background: rgba(10, 14, 26, .72); border: 1px solid var(--rule-2); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
         .hud-badge { display: inline-flex; align-items: center; gap: 8px; padding: 5px 13px 5px 11px; border-radius: 999px; font-size: 12px; font-weight: 500; color: var(--text); }
@@ -104,6 +106,7 @@
         .pairs dt { font-size: 13px; font-weight: 400; color: var(--text-2); }
         .pairs dd { margin: 0; font-size: 15px; font-weight: 500; font-variant-numeric: tabular-nums; text-align: right; }
 
+        /* */
         .sim-title { font-size: 13px; color: var(--text-2); margin-bottom: 10px; }
         .sim-row { display: flex; flex-wrap: wrap; gap: 8px; }
         .sim-btn { flex: 1 1 0; border: 1px solid var(--rule-2); background: transparent; color: var(--text); font: inherit; font-size: 13px; padding: 8px 14px; border-radius: 8px; cursor: pointer; transition: background .15s, border-color .15s; }
@@ -158,7 +161,6 @@
     </style>
 </head>
 <body data-bs-theme="dark">
-
     <header class="topbar">
         <div class="shell topbar-in">
             <div class="brand">
@@ -420,7 +422,7 @@
         scene.add(conveyorGroup);
 
         // ==========================================
-        // ส่วนที่ 2: การคำนวณสายพาน
+        // ส่วนที่ 2: การคำนวณสายพาน (แยกชิ้น)
         // ==========================================
         const scale = 0.05; 
         const SCENE_UNITS_PER_METER = 100 * scale;
@@ -432,22 +434,34 @@
         const rIn = rOut - bWid; 
         const halfS = (tLen - tWid) / 2; 
 
-        function createOvalShape(outer, inner) {
-            const s = new THREE.Shape();
-            s.moveTo(halfS, outer);
-            s.absarc(halfS, 0, outer, Math.PI/2, -Math.PI/2, true);
-            s.lineTo(-halfS, -outer);
-            s.absarc(-halfS, 0, outer, -Math.PI/2, Math.PI/2, true);
-            s.lineTo(halfS, outer);
-
-            const h = new THREE.Path();
-            h.moveTo(halfS, inner);
-            h.lineTo(-halfS, inner);
-            h.absarc(-halfS, 0, inner, Math.PI/2, -Math.PI/2, false);
-            h.lineTo(halfS, -inner);
-            h.absarc(halfS, 0, inner, -Math.PI/2, Math.PI/2, false);
-            s.holes.push(h); 
-            return s;
+        // Function สำหรับสร้าง Shape ที่แยกกัน 4 ชิ้น
+        function createSeparateShapes(outer, inner) {
+            const gapL = 0.15; 
+            const gapA = 0.025; 
+            
+            const straightTop = new THREE.Shape();
+            straightTop.moveTo(halfS - gapL, outer);
+            straightTop.lineTo(-halfS + gapL, outer);
+            straightTop.lineTo(-halfS + gapL, inner);
+            straightTop.lineTo(halfS - gapL, inner);
+            
+            const straightBottom = new THREE.Shape();
+            straightBottom.moveTo(-halfS + gapL, -outer);
+            straightBottom.lineTo(halfS - gapL, -outer);
+            straightBottom.lineTo(halfS - gapL, -inner);
+            straightBottom.lineTo(-halfS + gapL, -inner);
+            
+            const curveRight = new THREE.Shape();
+            curveRight.absarc(halfS, 0, outer, -Math.PI/2 + gapA, Math.PI/2 - gapA, false);
+            curveRight.lineTo(halfS + Math.cos(Math.PI/2 - gapA)*inner, Math.sin(Math.PI/2 - gapA)*inner);
+            curveRight.absarc(halfS, 0, inner, Math.PI/2 - gapA, -Math.PI/2 + gapA, true);
+            
+            const curveLeft = new THREE.Shape();
+            curveLeft.absarc(-halfS, 0, outer, Math.PI/2 + gapA, Math.PI*1.5 - gapA, false);
+            curveLeft.lineTo(-halfS + Math.cos(Math.PI*1.5 - gapA)*inner, Math.sin(Math.PI*1.5 - gapA)*inner);
+            curveLeft.absarc(-halfS, 0, inner, Math.PI*1.5 - gapA, Math.PI/2 + gapA, true);
+            
+            return [straightTop, straightBottom, curveRight, curveLeft];
         }
 
         const zOffset = -(rOut + rIn) / 2;
@@ -455,15 +469,16 @@
         const LIFT = 70 * scale - 0.7;
 
         // ---------- ฐานเฟรม (pan) ----------
-        const frameShape = createOvalShape(rOut + 0.2, rIn - 0.2);
-        const frameGeo = new THREE.ExtrudeGeometry(frameShape, { depth: 0.2, ...EXTRUDE_SMOOTH });
-        const frameMat = new THREE.MeshStandardMaterial({ color: C(0x1a2335), metalness: 0.7, roughness: 0.5 });
-        const frame = new THREE.Mesh(frameGeo, frameMat);
-        frame.rotation.x = Math.PI / 2;
-        frame.position.set(0, 0.9 + LIFT, zOffset);
-        frame.castShadow = true;
-        frame.receiveShadow = true;
-        conveyorGroup.add(frame);
+        const frameShapes = createSeparateShapes(rOut + 0.2, rIn - 0.2);
+        frameShapes.forEach(shape => {
+            const frameGeo = new THREE.ExtrudeGeometry(shape, { depth: 0.2, ...EXTRUDE_SMOOTH });
+            const frameMat = new THREE.MeshStandardMaterial({ color: C(0x1a2335), metalness: 0.7, roughness: 0.5 });
+            const frame = new THREE.Mesh(frameGeo, frameMat);
+            frame.rotation.x = Math.PI / 2;
+            frame.position.set(0, 0.9 + LIFT, zOffset);
+            frame.castShadow = true; frame.receiveShadow = true;
+            conveyorGroup.add(frame);
+        });
 
         // ---------- ผิวสายพาน ----------
         function makeBeltTexture() {
@@ -482,33 +497,53 @@
             t.encoding = THREE.sRGBEncoding;
             return t;
         }
-        const beltShape = createOvalShape(rOut, rIn);
-        const beltGeo = new THREE.ExtrudeGeometry(beltShape, { depth: 0.12, ...EXTRUDE_SMOOTH });
-        const beltMat = new THREE.MeshStandardMaterial({ map: makeBeltTexture(), roughness: 0.82, metalness: 0.05 });
-        const belt = new THREE.Mesh(beltGeo, beltMat);
-        belt.rotation.x = Math.PI / 2;
-        belt.position.set(0, 1.07 + LIFT, zOffset);
-        belt.receiveShadow = true;
-        conveyorGroup.add(belt);
+        
+        const beltShapes = createSeparateShapes(rOut, rIn);
+        beltShapes.forEach(shape => {
+            const beltGeo = new THREE.ExtrudeGeometry(shape, { depth: 0.12, ...EXTRUDE_SMOOTH });
+            const beltMat = new THREE.MeshStandardMaterial({ map: makeBeltTexture(), roughness: 0.82, metalness: 0.05 });
+            const belt = new THREE.Mesh(beltGeo, beltMat);
+            belt.rotation.x = Math.PI / 2;
+            belt.position.set(0, 1.07 + LIFT, zOffset);
+            belt.receiveShadow = true;
+            conveyorGroup.add(belt);
+        });
 
         // ---------- ราวข้างสายพาน + เส้นไฟขอบ ----------
         const railMat = new THREE.MeshStandardMaterial({ color: C(0xb4c4dc), metalness: 0.9, roughness: 0.28 });
         const RAIL_OPTS = { depth: 0.26, bevelEnabled: true, bevelThickness: 0.03, bevelSize: 0.03, bevelSegments: 3, curveSegments: 96 };
-        [createOvalShape(rOut + 0.2, rOut), createOvalShape(rIn, rIn - 0.2)].forEach(shape => {
+        [...createSeparateShapes(rOut + 0.2, rOut), ...createSeparateShapes(rIn, rIn - 0.2)].forEach(shape => {
             const rail = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, RAIL_OPTS), railMat);
             rail.rotation.x = Math.PI / 2;
             rail.position.set(0, 1.19 + LIFT, zOffset);
-            rail.castShadow = true;
-            rail.receiveShadow = true;
+            rail.castShadow = true; rail.receiveShadow = true;
             conveyorGroup.add(rail);
         });
+        
         const glowMat = new THREE.MeshBasicMaterial({ color: C(0x3d8bff), toneMapped: false });
-        [createOvalShape(rOut + 0.12, rOut + 0.08), createOvalShape(rIn - 0.08, rIn - 0.12)].forEach(shape => {
+        [...createSeparateShapes(rOut + 0.12, rOut + 0.08), ...createSeparateShapes(rIn - 0.08, rIn - 0.12)].forEach(shape => {
             const glow = new THREE.Mesh(new THREE.ExtrudeGeometry(shape, { depth: 0.01, ...EXTRUDE_SMOOTH }), glowMat);
             glow.rotation.x = Math.PI / 2;
             glow.position.set(0, 1.232 + LIFT, zOffset);
             conveyorGroup.add(glow);
         });
+
+        // Transition Rollers
+        const rollerGeo = new THREE.CylinderGeometry(0.12, 0.12, bWid - 0.05, 16);
+        const rollerMat = new THREE.MeshStandardMaterial({ color: C(0x2d3445), metalness: 0.6, roughness: 0.4 });
+        const addRoller = (x, z) => {
+            const mesh = new THREE.Mesh(rollerGeo, rollerMat);
+            mesh.rotation.x = Math.PI / 2;
+            mesh.position.set(x, 1.05 + LIFT, z);
+            mesh.castShadow = true; mesh.receiveShadow = true;
+            conveyorGroup.add(mesh);
+        };
+        const rShift1 = 0.07;
+        const rShift2 = 0.16;
+        addRoller(halfS - rShift1, 0); addRoller(halfS + rShift2, 0);
+        addRoller(-halfS + rShift1, 0); addRoller(-halfS - rShift2, 0);
+        addRoller(halfS - rShift1, zOffset * 2); addRoller(halfS + rShift2, zOffset * 2);
+        addRoller(-halfS + rShift1, zOffset * 2); addRoller(-halfS - rShift2, zOffset * 2);
 
         for (let k = 0; k <= 24; k++) {
             const a = -Math.PI / 2 + (k / 24) * Math.PI;
@@ -553,16 +588,28 @@
         }
 
         const stripeCount = Math.floor(totalPath / 1.5);
-        const stripeGeo = new THREE.BoxGeometry(0.08, 0.13, bWid - 0.1);
         const stripeMat = new THREE.MeshStandardMaterial({ color: C(0x37567f), metalness: 0.15, roughness: 0.6, emissive: C(0x0a1626), emissiveIntensity: 0.6 });
+
+        const STRIPE_SEGMENTS = 5;
+        const segFullWidth = bWid - 0.1;
+        const segGap = 0.015;
+        const segW = segFullWidth / STRIPE_SEGMENTS - segGap;
+        const segGeo = new THREE.BoxGeometry(0.08, 0.13, segW);
+
         for (let i = 0; i < stripeCount; i++) {
-            const stripe = new THREE.Mesh(stripeGeo, stripeMat);
+            const group = new THREE.Group();
+            for (let s = 0; s < STRIPE_SEGMENTS; s++) {
+                const seg = new THREE.Mesh(segGeo, stripeMat);
+                const zLocal = -segFullWidth / 2 + segW / 2 + s * (segFullWidth / STRIPE_SEGMENTS);
+                seg.position.set(0, 0, zLocal);
+                group.add(seg);
+            }
             let progress = i / stripeCount;
-            stripe.userData = { isStripe: true, progress: progress };
+            group.userData = { isStripe: true, progress: progress };
             let t = getPathTransform(progress);
-            stripe.position.set(t.pos.x, 1.08 + LIFT, t.pos.z);
-            stripe.rotation.y = t.rotY; 
-            conveyorGroup.add(stripe);
+            group.position.set(t.pos.x, 1.08 + LIFT, t.pos.z);
+            group.rotation.y = t.rotY;
+            conveyorGroup.add(group);
         }
 
         // ---------- ขา / คานรับ ----------
@@ -591,9 +638,9 @@
         // ส่วนที่ 4: การสร้างประตูกล้องสแกน (Gates)
         // ==========================================
         const GATES = ['Gate-A', 'Gate-B', 'Gate-C'];
-        const GATE1_OFFSET_CM = 62;   
-        const GATE_GAP_CM = 65;       
-        const GATE3_OFFSET_CM = 65;
+        const GATE1_OFFSET_CM = 65;   
+        const GATE_GAP_CM = 80;       
+        const GATE3_OFFSET_CM = 70;
 
         const gateAX = -halfS + (GATE1_OFFSET_CM * scale);
         const gateBX = gateAX + (GATE_GAP_CM * scale);
@@ -604,7 +651,6 @@
         const BELT_SURFACE_Y = 1.145 + LIFT;
 
         // ---------- ไม้กั้นคัดชิ้นงาน (Servo Diverter) ----------
-        // ติดตั้งห่างจากเกต 3 (Gate-C) ไปทางปลายทางสายพาน 30 ซม. บนทางตรงเดียวกัน (z คงที่)
         const DIVERTER_OFFSET_FROM_GATE3_CM = 30;
         const diverterX = gateCX - (DIVERTER_OFFSET_FROM_GATE3_CM * scale);
         const diverterZ = GATE_Z['Gate-C'];
@@ -704,9 +750,6 @@
             gateObjects[g] = group;
         });
 
-        // ==========================================
-        // ส่วนที่ 4.5: ไม้กั้นคัดชิ้นงาน (Servo Diverter) ที่ระยะ 30 ซม. หลังเกต 3
-        // ==========================================
         const diverterGroup = new THREE.Group();
         diverterGroup.position.set(diverterX, 0, diverterZ);
         scene.add(diverterGroup);
@@ -717,27 +760,22 @@
         const servoBodyMat = new THREE.MeshStandardMaterial({ color: C(0x1c1c1c), roughness: 0.6, metalness: 0.3 });
         const paddleMat = new THREE.MeshStandardMaterial({ color: C(0xeef2fa), roughness: 0.5, metalness: 0.05 });
 
-        // ด้านที่ผลักชิ้นงานออก: -z = ขอบนอกของโค้ง (ถ้าทิศไม่ตรงกับของจริง ให้สลับเป็น +bWid/2)
         const DIVERTER_EDGE_Z = (bWid / 2 + 0.05);
 
-        // ฐานอะคริลิกยึดกับขอบสายพาน
         const diverterBase = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.025, 0.5), acrylicMat);
         diverterBase.position.set(0, BELT_SURFACE_Y - 0.015, DIVERTER_EDGE_Z);
         diverterBase.castShadow = true; diverterBase.receiveShadow = true;
         diverterGroup.add(diverterBase);
 
-        // ตัวเซอร์โว
         const diverterServo = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.24, 0.2), servoBodyMat);
         diverterServo.position.set(0, BELT_SURFACE_Y + 0.13, DIVERTER_EDGE_Z);
         diverterServo.castShadow = true;
         diverterGroup.add(diverterServo);
 
-        // จุดหมุน (pivot) ของแขนปีกคัด — หมุนรอบแกน Y
         const diverterPivot = new THREE.Group();
         diverterPivot.position.set(0, BELT_SURFACE_Y + 0.26, DIVERTER_EDGE_Z);
         diverterGroup.add(diverterPivot);
 
-        // แขนปีกสีขาว (รูปทรงประมาณจากไม้กั้นจริง): ปีกบนทรงลิ่ม + ก้านยาวด้านล่างที่กวาดพื้นสายพาน
         const paddleWedge = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.4, 0.04), paddleMat);
         paddleWedge.position.set(0.02, 0.22, 0);
         paddleWedge.rotation.z = -0.15;
@@ -750,11 +788,10 @@
         diverterGroup.children.forEach(c => { c.castShadow = true; });
         paddleWedge.castShadow = true; paddleArm.castShadow = true;
 
-        // มุมพัก (แนบขนานแนวสายพาน ไม่กีดขวาง) และมุมผลัก (กวาดข้ามสายพาน)
         const DIVERTER_IDLE_ANGLE = 0;
         const DIVERTER_ACTIVE_ANGLE = Math.PI * 0.45;
-        const DIVERTER_SWING_DURATION = 0.35; // วินาทีต่อจังหวะ (ออก หรือ กลับ)
-        let diverterSwingT = 0;      // 0..1
+        const DIVERTER_SWING_DURATION = 0.35; 
+        let diverterSwingT = 0;      
         let diverterSwingActive = false;
 
         function triggerDiverter() {
@@ -762,9 +799,6 @@
             diverterSwingActive = true;
         }
 
-        // ==========================================
-        // ส่วนที่ 4.6: ไม้บรรทัดวัดระยะ + แผง Debug สำหรับคาลิเบรตกับของจริง
-        // ==========================================
         function makeTickLabel(text) {
             const cv = document.createElement('canvas'); cv.width = 128; cv.height = 48;
             const x = cv.getContext('2d');
@@ -785,10 +819,9 @@
         debugRulerGroup.visible = false;
         scene.add(debugRulerGroup);
 
-        const RULER_STEP_CM = 20; // ระยะห่างระหว่างขีดบนไม้บรรทัด
+        const RULER_STEP_CM = 20; 
         const tickMat = new THREE.MeshBasicMaterial({ color: C(0x4aa8ff), toneMapped: false });
 
-        // เพิ่มขีดวัดระยะ (ซม. นับจากจุดเริ่มของทางตรงนั้นๆ) ตามแนวทางเดินของพัสดุจริง
         function addRulerTicks(zConst, dir) {
             const straightLenCm = lenStraight / scale;
             for (let d = 0; d <= straightLenCm; d += RULER_STEP_CM) {
@@ -803,13 +836,12 @@
                 debugRulerGroup.add(label);
             }
         }
-        addRulerTicks(0, +1);           // ทางตรงแรก (เสา 1-2 อยู่แถวนี้) ทิศเดินทาง +x
-        addRulerTicks(zOffset * 2, -1); // ทางตรงสอง (เสา 3 + ไม้กั้น อยู่แถวนี้) ทิศเดินทาง -x
+        addRulerTicks(0, +1);           
+        addRulerTicks(zOffset * 2, -1); 
 
-        // ---------- แผง Debug (ข้อความ) ----------
         let debugMode = false;
         let debugPanelAccum = 0;
-        const DEBUG_PANEL_INTERVAL = 0.2; // อัปเดตทุก 0.2 วิ กันหน้าเว็บกระตุก
+        const DEBUG_PANEL_INTERVAL = 0.2; 
 
         function escHtml(s) {
             return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -859,8 +891,6 @@
         const packages = []; 
         const pkgColors = { REJECT: 0xE24B4A, PASS: 0x378ADD, default: 0x7F77DD };
 
-        // เช็คสถานะจากของจริงแบบไม่สนตัวพิมพ์เล็ก-ใหญ่
-        // ของจริง: Gate-B = "Start", Gate-C = "In progress" หรือ "Reject", Gate-A = "Complete"
         function isRejectStatus(status) {
             return String(status || '').trim().toUpperCase() === 'REJECT';
         }
@@ -888,7 +918,6 @@
             pkgMats[k] = new THREE.MeshStandardMaterial({ color: C(v), emissive: C(v), emissiveIntensity: 0.08, roughness: 0.5, metalness: 0.05 });
         });
 
-        // ---------- ระบบความเร็ว 2 โซน ----------
         let speedStraightUnitsPerSec = 0;
         let speedCurveUnitsPerSec = 0;
 
@@ -913,12 +942,10 @@
 
         let stats = { total: 0, passCount: 0, rejectCount: 0, tags: new Set() };
         function updateStats(data) {
-            // เสาหนึ่ง (Gate-A) ส่ง "Complete" เมื่อวนครบรอบ = นับเป็น PASS
             if (data.gate_name === 'Gate-A' && isCompleteStatus(data.status)) {
                 stats.total++;
                 stats.passCount++;
             }
-            // เสาสาม (Gate-C) ส่ง "Reject" เมื่อคัดออก = นับเป็น REJECT
             if (data.gate_name === 'Gate-C' && isRejectStatus(data.status)) {
                 stats.total++;
                 stats.rejectCount++;
@@ -996,7 +1023,6 @@
             tagMesh.position.set(0, h / 2 + 0.01, 0);
             mesh.add(tagMesh);
 
-            // จุดเกิดพัสดุ = เสาสอง (Gate-B) เพราะเป็นเสาแรกที่ตรวจจับว่ามีชิ้นงาน
             let startProgress = ((GATE1_OFFSET_CM + GATE_GAP_CM) * scale) / totalPath; 
             let t = getPathTransform(startProgress);
             mesh.userData.baseY = BELT_SURFACE_Y + h / 2;
@@ -1012,38 +1038,30 @@
                 done: false,
                 isRejected: false, 
                 divertered: false,
-                // จุดเกิด = ตำแหน่ง Gate-B พอดี ถือว่า "ผ่าน Gate-B" ไปแล้วตั้งแต่เกิด กัน log ซ้ำตอน spawn
                 detectedGates: new Set(['Gate-B'])
             });
         }
 
-        // บันทึกเหตุการณ์ผ่านเกต 1 ครั้ง (กระพริบไฟ + สถิติ + แถวใน log table)
-        // ใช้ร่วมกันทั้งจาก physics-detection (กล่องวิ่งผ่านตำแหน่งเกตจริงในฉาก 3D)
-        // และจากข้อความ MQTT จริงที่เพิ่งได้รับ เพื่อไม่ให้มี 2 จุดเขียน log แยกกัน
         function logGateEvent(evt) {
-            flashGate(evt.gate_name, evt.status);   // ใช้ชื่อภายใน (Gate-A/B/C) หาไฟที่ถูกเกต
-            updateStats(evt);                        // ใช้ชื่อภายในตัดสิน PASS/REJECT
+            flashGate(evt.gate_name, evt.status);   
+            updateStats(evt);                        
             if (dataTable) {
                 let displayTime = new Date(evt.event_time).toLocaleString('th-TH');
                 dataTable.row.add([
                     evt.tag_id,
-                    evt.gate_name_raw || evt.gate_name, // โชว์ชื่อจริงตามที่อุปกรณ์ส่งมา
+                    evt.gate_name_raw || evt.gate_name, 
                     evt.status,
                     displayTime
                 ]).draw(false);
             }
         }
 
-        // เรียกจาก physics-detection ตอนกล่องใน 3D วิ่งผ่านตำแหน่งเกตจริง
-        // ทำแค่กระพริบไฟให้ตรงกับการเคลื่อนที่ (ภาพ/ความรู้สึกสมจริง) เท่านั้น
-        // ไม่ลงตาราง/ไม่นับสถิติ เพราะข้อมูลที่นับได้ต้องมาจากอุปกรณ์จริง (MQTT) เท่านั้น
         function triggerDetection(pkg, gateName) {
             flashGate(gateName, pkg.status);
         }
 
         const clock = new THREE.Clock();
 
-        // ตรวจสอบว่าพิกัดปัจจุบันอยู่บนทางตรงหรือโค้ง แล้วคืนค่าความเร็วที่ถูกต้อง
         function getSpeedAtProgress(progress) {
             let p = ((progress % 1.0) + 1.0) % 1.0; 
             let d = p * totalPath; 
@@ -1095,7 +1113,6 @@
                     return; 
                 }
                 
-                // คำนวณระยะทางเฉพาะตัวกล่องตามโซนความเร็ว
                 let travel = getSpeedAtProgress(p.progress) * dt; 
                 
                 p.progress += travel / totalPath; 
@@ -1120,7 +1137,6 @@
                     }
                 }
 
-                // ไม้กั้นคัดชิ้นงาน (30 ซม. หลังเกต 3) เป็นจุดที่คัดออกจริง
                 if (!p.divertered) {
                     const ddx = p.mesh.position.x - diverterX;
                     const ddz = p.mesh.position.z - diverterZ;
@@ -1144,7 +1160,6 @@
                 if (packages[i].done) packages.splice(i, 1);
             }
 
-            // อนิเมชันแขนไม้กั้น: กวาดออก (มุมพัก -> มุมผลัก) แล้วกวาดกลับ
             if (diverterSwingActive) {
                 diverterSwingT += dt / DIVERTER_SWING_DURATION;
                 if (diverterSwingT >= 1) {
@@ -1157,7 +1172,6 @@
 
             conveyorGroup.children.forEach(c => {
                 if (c.userData.isStripe) {
-                    // คำนวณความเร็วเฉพาะลายสายพานในโซนนั้นๆ
                     let travel = getSpeedAtProgress(c.userData.progress) * dt;
                     
                     c.userData.progress += travel / totalPath; 
@@ -1183,7 +1197,7 @@
             if(!wrap) return;
             const w = wrap.clientWidth;
             const h = wrap.clientHeight;
-            frameCamera(); // คำนวณ aspect + กรอบมองเห็นใหม่ให้เอง (orthographic)
+            frameCamera(); 
             renderer.setSize(w, h, false);
         }
         window.addEventListener('resize', onResize);
@@ -1194,8 +1208,7 @@
         // ส่วนที่ 6: การทำงานของ DATATABLES และ MQTT
         // ==========================================
         let dataTable;
-        // เก็บอ้างอิงกล่อง 3D ที่กำลังวิ่งอยู่บนสายพาน ต่อ 1 tag_id (ใช้ทั้งใน onMessageArrived และ animate)
-        const activeTagPackages = new Map(); // tag_id -> package object
+        const activeTagPackages = new Map(); 
 
         $(document).ready(function () {
             const esc = (v) => $('<div>').text(v == null ? '' : v).html();
@@ -1294,17 +1307,13 @@
                 return { tag_id, gate_name, status, event_time };
             }
 
-            // ---------- กันอ่านซ้ำรัว (RFID debounce) ----------
-            // ถ้าแท็กเดิม + ประตูเดิม ถูกอ่านซ้ำภายในช่วงเวลานี้ ให้ถือว่าเป็นสัญญาณรบกวน/อ่านซ้ำ ไม่สร้างกล่องใหม่
             const RFID_DEBOUNCE_MS = 2000;
-            const lastReadByTag = new Map(); // tag_id -> { gate_name, time }
+            const lastReadByTag = new Map(); 
 
-            // ---------- แม็ปชื่อเกตจากเครื่องอ่าน RFID จริง -> ชื่อเกตภายในของโมเดล 3D ----------
-            // ปรับ key ฝั่งซ้ายให้ตรงกับ gate_name ที่เครื่องอ่านแต่ละตัวส่งมาจริง ถ้าไม่ตรงตามนี้
             const GATE_NAME_MAP = {
-                'RFID_GATE1': 'Gate-B', // เสาสอง (จุดเกิดพัสดุ)
-                'RFID_GATE2': 'Gate-C', // เสาสาม
-                'RFID_GATE3': 'Gate-A'  // เสาหนึ่ง
+                'RFID_GATE1': 'Gate-B', 
+                'RFID_GATE2': 'Gate-C', 
+                'RFID_GATE3': 'Gate-A'  
             };
 
             function onMessageArrived(message) {
@@ -1332,12 +1341,9 @@
                     return;
                 }
 
-                // เก็บชื่อเกตดิบที่อุปกรณ์จริงส่งมา (เช่น RFID_GATE1) ไว้โชว์ในตาราง
                 data.gate_name_raw = data.gate_name;
-                // แปลงเป็นชื่อภายใน (Gate-A/B/C) ไว้ใช้ตัดสินใจ spawn/คัดออก/สถิติเท่านั้น
                 data.gate_name = GATE_NAME_MAP[data.gate_name] || data.gate_name;
 
-                // กันแท็กเดิม+ประตูเดิมที่ถูกอ่านซ้ำรัวๆ ภายในช่วง debounce
                 const now = Date.now();
                 const lastRead = lastReadByTag.get(data.tag_id);
                 if (lastRead && lastRead.gate_name === data.gate_name && (now - lastRead.time) < RFID_DEBOUNCE_MS) {
@@ -1347,18 +1353,14 @@
                 lastReadByTag.set(data.tag_id, { gate_name: data.gate_name, time: now });
 
                 if (data.gate_name === 'Gate-B') {
-                    // เสาสอง = จุดเกิดพัสดุ -> สร้างกล่อง 3D ใหม่เสมอ
                     const pkg = spawnPackageFromMQTT(data);
                     activeTagPackages.set(data.tag_id, pkg);
                 } else {
-                    // เสาอื่น (Gate-A / Gate-C) -> ใช้กล่องเดิมที่วิ่งอยู่แล้ว ไม่ spawn ซ้ำ
                     const pkg = activeTagPackages.get(data.tag_id);
                     if (pkg) {
-                        pkg.status = data.status; // อัปเดตผลตัดสินล่าสุด (เผื่อเพิ่งรู้ผล PASS/REJECT ที่เกตนี้)
-                        pkg.detectedGates.add(data.gate_name); // กัน physics-detection ลง log ซ้ำตอนกล่องวิ่งผ่านจริง
+                        pkg.status = data.status; 
+                        pkg.detectedGates.add(data.gate_name); 
 
-                        // รู้ผล Reject จากของจริงเมื่อไร (ปกติคือเสาสาม/Gate-C) ให้กล่องเปลี่ยนเป็นสีแดงทันที
-                        // (ไม่ต้องรอถึงไม้กั้นค่อยเปลี่ยน สีต้องตามผลตัดสินจริง)
                         if (isRejectStatus(data.status)) {
                             const rejectMat = pkgMats['REJECT'];
                             if (rejectMat) pkg.mesh.material.color.copy(rejectMat.color);
@@ -1374,7 +1376,6 @@
         });
 
         function spawnPackageFromMQTT(data) {
-            // เก็บสถานะดิบ ('Start'/'In progress'/'Reject'/'Complete') ไว้ใช้ตัดสินใจที่ไม้กั้น ส่วน matKey ใช้แค่เลือกสีกล่อง
             const matKey = isRejectStatus(data.status) ? 'REJECT' : 'PASS';
             const mat = pkgMats[matKey] || pkgMats['default'];
 
@@ -1406,7 +1407,6 @@
             tagMesh.position.set(0, h / 2 + 0.01, 0);
             mesh.add(tagMesh);
 
-            // จุดเกิดพัสดุ = เสาสอง (Gate-B) เพราะเป็นเสาแรกที่ตรวจจับว่ามีชิ้นงาน
             let startProgress = ((GATE1_OFFSET_CM + GATE_GAP_CM) * scale) / totalPath; 
             let t = getPathTransform(startProgress);
             mesh.userData.baseY = BELT_SURFACE_Y + h / 2;
@@ -1422,8 +1422,6 @@
                 done: false,
                 isRejected: false,
                 divertered: false,
-                // จุดเกิด = ตำแหน่ง Gate-B พอดี ถือว่า "ผ่าน Gate-B" ไปแล้วตั้งแต่เกิด
-                // กันไม่ให้ระบบตรวจจับระยะทางลง log ซ้ำกับข้อความ MQTT ที่เพิ่งได้รับมา
                 detectedGates: new Set(['Gate-B'])
             };
             packages.push(pkg);
